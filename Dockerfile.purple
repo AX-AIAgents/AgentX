@@ -33,12 +33,11 @@ RUN uv sync --frozen --no-dev
 COPY src/agents/ ./src/agents/
 COPY src/__init__.py ./src/
 
-# Add virtual environment to PATH
-ENV PATH="/app/.venv/bin:$PATH"
+# Set environment
 ENV PYTHONPATH=/app
 
-# Create run script using venv python
-RUN echo '#!/bin/bash\nexport PORT=${AGENT_PORT:-${PORT:-9000}}\necho "🟣 Starting Purple Agent on port $PORT"\nexec python -m src.agents.external_agent' > run_purple.sh && chmod +x run_purple.sh
+# Create run script using ABSOLUTE path to venv python
+RUN echo '#!/bin/bash\nexport PORT=${AGENT_PORT:-${PORT:-9000}}\necho "🟣 Starting Purple Agent on port $PORT"\nexec /app/.venv/bin/python -m src.agents.external_agent' > run_purple.sh && chmod +x run_purple.sh
 
 # Expose port
 EXPOSE 9000
