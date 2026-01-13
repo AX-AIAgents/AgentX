@@ -19,15 +19,24 @@ ENV PYTHONUNBUFFERED=1
 # Working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies + Node.js (for MCP servers)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     build-essential \
+    ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Verify installations
+RUN node --version && npm --version && python --version
 
 # Install uv for faster package management
 RUN pip install --no-cache-dir uv
+
+# Install npx globally (comes with npm, but ensure it's available)
+RUN npm install -g npm@latest
 
 # Copy dependency files first (for better caching)
 COPY pyproject.toml uv.lock README.md ./
