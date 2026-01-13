@@ -40,7 +40,8 @@ def get_openai_client():
 
 # State
 conversation_history = []
-mcp_endpoint = "http://localhost:8091"
+# MCP endpoint - can be overridden via env var
+mcp_endpoint = os.getenv("MCP_ENDPOINT", "http://localhost:8091")
 available_tools = []
 
 
@@ -202,6 +203,13 @@ async def fetch_tools_from_mcp():
     if available_tools:
         return available_tools
     
+    # Skip MCP if endpoint contains localhost and we're in production (Render)
+    # In production, Purple Agent doesn't have access to Green Agent's MCP server
+    if "localhost" in mcp_endpoint and os.getenv("RENDER"):
+        print("⚠️ Skipping MCP fetch - Running in production without MCP access")
+        print("   Purple Agent will run without tools (basic chat only)")
+        return []
+    
     try:
         async with httpx.AsyncClient(timeout=5.0) as http:
             response = await http.get(f"{mcp_endpoint}/tools")
@@ -209,7 +217,8 @@ async def fetch_tools_from_mcp():
                 available_tools = response.json().get("tools", [])
                 print(f"📦 Fetched {len(available_tools)} tools from MCP")
     except Exception as e:
-        print(f"⚠️ Failed to fetch tools: {e}")
+        print(f"⚠️ Failed to fetch tools from MCP: {e}")
+        print(f"   Purple Agent will run without tools")
     return available_tools
 
 
@@ -424,6 +433,29 @@ def make_completion_response(text: str) -> dict:
 @app.get("/health")
 def health():
     return {"status": "ok", "agent": "openai_gpt4o_mini_agent"}
+
+
+@app.get("/debug/env")
+def debug_env():
+    """Debug endpoint to check environment variables (for troubleshooting)."""
+    import os
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    return {
+        "status": "debug",
+        "environment": {
+            "has_openai_key": bool(api_key),
+            "key_length": len(api_key),
+            "key_prefix": api_key[:15] + "..." if len(api_key) > 15 else "NOT_SET",
+            "mcp_endpoint": os.getenv("MCP_ENDPOINT", "http://localhost:8091"),
+            "port": os.getenv("PORT", "9000"),
+            "agent_port": os.getenv("AGENT_PORT", "not set"),
+            "render": bool(os.getenv("RENDER")),
+        },
+        "openai_client": {
+            "initialized": _client is not None,
+            "can_initialize": bool(api_key),
+        }
+    }
 
 
 @app.post("/reset")
