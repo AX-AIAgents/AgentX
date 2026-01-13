@@ -46,7 +46,9 @@ class GreenAgentExecutor(AgentExecutor):
         Args:
             task_file: Path to task_definitions.jsonl file
         """
-        self.task_file = task_file or os.getenv("TASK_DEFINITIONS_FILE")
+        # Priority: argument > env var > default path
+        default_path = "src/data/task_definitions.jsonl"
+        self.task_file = task_file or os.getenv("TASK_DEFINITIONS_FILE", default_path)
         self.task_loader: TaskLoader | None = None
         
         # Current evaluation state
