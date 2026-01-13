@@ -32,12 +32,10 @@ RUN uv sync --frozen --no-dev
 # Copy only Purple Agent code
 COPY src/agents/ ./src/agents/
 COPY src/__init__.py ./src/
+COPY run_purple.py ./
 
 # Set environment
 ENV PYTHONPATH=/app
-
-# Create run script using ABSOLUTE path to venv python
-RUN echo '#!/bin/bash\nexport PORT=${AGENT_PORT:-${PORT:-9000}}\necho "🟣 Starting Purple Agent on port $PORT"\nexec /app/.venv/bin/python -m src.agents.external_agent' > run_purple.sh && chmod +x run_purple.sh
 
 # Expose port
 EXPOSE 9000
@@ -46,4 +44,4 @@ EXPOSE 9000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
   CMD curl -f http://localhost:${PORT:-9000}/health || exit 1
 
-CMD ["./run_purple.sh"]
+CMD ["/app/.venv/bin/python", "run_purple.py"]

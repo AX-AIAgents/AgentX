@@ -118,6 +118,63 @@ async def reset_agent(request: Request) -> JSONResponse:
     })
 
 
+async def mcp_proxy(request: Request) -> JSONResponse:
+    """
+    Proxy endpoint to forward MCP requests to internal MCP server.
+    
+    This allows Purple Agent to access MCP tools via Green Agent's public URL.
+    Example: https://green-agent.run.app/mcp/tools
+    """
+    # Get the path after /mcp/
+    path = request.path_params.get("path", "")
+    mcp_url = f"http://localhost:{MCP_PORT}/{path}"
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Forward GET requests
+            if request.method == "GET":
+                response = await client.get(
+                    mcp_url,
+                    params=request.query_params
+                )
+            # Forward POST requests
+            elif request.method == "POST":
+                body = await request.body()
+                response = await client.post(
+                    mcp_url,
+                    content=body,
+                    headers={"Content-Type": request.headers.get("content-type", "application/json")}
+                )
+            else:
+                return JSONResponse(
+                    {"error": "Method not allowed"},
+                    status_code=405
+                )
+            
+            # Return the MCP response
+            return JSONResponse(
+                response.json(),
+                status_code=response.status_code
+            )
+    
+    except httpx.ConnectError:
+        return JSONResponse(
+            {
+                "error": "MCP server unavailable",
+                "details": "Internal MCP server is not running"
+            },
+            status_code=503
+        )
+    except Exception as e:
+        return JSONResponse(
+            {
+                "error": "MCP proxy error",
+                "details": str(e)
+            },
+            status_code=500
+        )
+
+
 if __name__ == "__main__":
     # Create request handler
     request_handler = DefaultRequestHandler(
@@ -135,6 +192,8 @@ if __name__ == "__main__":
     app = server.build()
     app.add_route("/health", health_check, methods=["GET"])
     app.add_route("/reset", reset_agent, methods=["POST"])
+    # MCP proxy - forward requests to internal MCP server
+    app.add_route("/mcp/{path:path}", mcp_proxy, methods=["GET", "POST"])
 
     # Run with uvicorn
     uvicorn.run(app, host="0.0.0.0", port=PORT)

@@ -41,8 +41,10 @@ def get_openai_client():
 # State
 conversation_history = []
 # MCP endpoint - can be overridden via env var
-mcp_endpoint = os.getenv("MCP_ENDPOINT", "http://localhost:8091")
+# If not set, will be discovered from Green Agent's card
+mcp_endpoint = os.getenv("MCP_ENDPOINT", None)
 available_tools = []
+green_agent_url = None  # Will be set when first message arrives
 
 
 # ============================================================
@@ -199,12 +201,19 @@ async def handle_message(request: A2ARequest) -> dict:
 
 async def fetch_tools_from_mcp():
     """Fetch available tools from MCP server."""
-    global available_tools
+    global available_tools, mcp_endpoint
+    
     if available_tools:
         return available_tools
     
+    # Auto-discover MCP endpoint if not set
+    if not mcp_endpoint:
+        mcp_endpoint = await discover_mcp_endpoint()
+        if not mcp_endpoint:
+            print("⚠️ MCP endpoint not found - running without tools")
+            return []
+    
     # Skip MCP if endpoint contains localhost and we're in production (Render)
-    # In production, Purple Agent doesn't have access to Green Agent's MCP server
     if "localhost" in mcp_endpoint and os.getenv("RENDER"):
         print("⚠️ Skipping MCP fetch - Running in production without MCP access")
         print("   Purple Agent will run without tools (basic chat only)")
@@ -215,11 +224,47 @@ async def fetch_tools_from_mcp():
             response = await http.get(f"{mcp_endpoint}/tools")
             if response.status_code == 200:
                 available_tools = response.json().get("tools", [])
-                print(f"📦 Fetched {len(available_tools)} tools from MCP")
+                print(f"📦 Fetched {len(available_tools)} tools from MCP: {mcp_endpoint}")
     except Exception as e:
-        print(f"⚠️ Failed to fetch tools from MCP: {e}")
+        print(f"⚠️ Failed to fetch tools from MCP ({mcp_endpoint}): {e}")
         print(f"   Purple Agent will run without tools")
     return available_tools
+
+
+async def discover_mcp_endpoint() -> str | None:
+    """
+    Discover MCP endpoint from Green Agent's agent card.
+    
+    Purple Agent can auto-discover Green Agent's MCP endpoint by:
+    1. Checking if GREEN_AGENT_URL env var is set
+    2. Fetching Green Agent's /.well-known/agent.json
+    3. Reading extensions.mcp_endpoint
+    
+    Returns MCP endpoint URL or None if not found.
+    """
+    green_url = os.getenv("GREEN_AGENT_URL")
+    if not green_url:
+        # Fallback to localhost for local testing
+        print("⚠️ GREEN_AGENT_URL not set, using localhost:8090/mcp")
+        return "http://localhost:8090/mcp"
+    
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as http:
+            # Fetch Green Agent's card
+            card_url = f"{green_url.rstrip('/')}/.well-known/agent.json"
+            print(f"🔍 Discovering MCP endpoint from: {card_url}")
+            response = await http.get(card_url)
+            
+            if response.status_code == 200:
+                card = response.json()
+                mcp_ep = card.get("extensions", {}).get("mcp_endpoint")
+                if mcp_ep:
+                    print(f"✅ MCP endpoint discovered: {mcp_ep}")
+                    return mcp_ep
+    except Exception as e:
+        print(f"⚠️ Failed to discover MCP endpoint: {e}")
+    
+    return None
 
 
 def build_openai_tools(mcp_tools: list) -> list:
