@@ -40,13 +40,15 @@ available_tools = []
 @app.get("/.well-known/agent.json")
 def agent_card():
     """Return agent capabilities and metadata."""
+    port = int(os.getenv("PORT", 9000))
     return {
         "name": "OpenAI GPT-4o-mini Agent",
         "description": "An A2A-compatible agent powered by OpenAI GPT-4o-mini",
-        "url": "http://localhost:9000/",
+        "url": f"http://localhost:{port}/",
         "version": "1.0.0",
-        "default_input_modes": ["text"],
-        "default_output_modes": ["text"],
+        "protocolVersion": "0.3.0",
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
         "capabilities": {
             "streaming": False,
             "pushNotifications": False,
