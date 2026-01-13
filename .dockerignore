@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+.eggs/
+*.egg-info/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-*
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Results and logs (runtime generated)
+results/
+historical_trajectories/
+*.log
+.ab/
+
+# OS
+.DS_Store
+Thumbs.db
+*.bak
+
+# Environment files (secrets)
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Documentation (not needed in container)
+docs/
+*.md
+!README.md
+
+# Tests
+tests/
+test_*.py
+*_test.py
+pytest.ini
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Development files
+Makefile
+docker-compose*.yml
+.dockerignore
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Cache
+.cache/
+.mypy_cache/
+.ruff_cache/

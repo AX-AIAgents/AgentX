@@ -1,0 +1,48 @@
+# ========================================
+# AgentX Purple Agent - Dockerfile
+# ========================================
+# Baseline A2A Agent for testing
+# ========================================
+
+FROM python:3.13-slim
+
+LABEL maintainer="AgentX Team"
+LABEL description="AgentX Purple Agent - Baseline A2A Agent"
+LABEL version="1.0.0"
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+RUN pip install --no-cache-dir uv
+
+# Copy dependency files
+COPY pyproject.toml uv.lock README.md ./
+
+# Install dependencies
+RUN uv sync --frozen --no-dev
+
+# Copy only Purple Agent code
+COPY src/agents/ ./src/agents/
+COPY src/__init__.py ./src/
+
+# Create run script for Purple Agent
+RUN echo '#!/bin/bash\nexport PORT=${AGENT_PORT:-${PORT:-9000}}\necho "🟣 Starting Purple Agent on port $PORT"\npython -m src.agents.external_agent' > run_purple.sh && chmod +x run_purple.sh
+
+# Expose port
+EXPOSE 9000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD curl -f http://localhost:${PORT:-9000}/health || exit 1
+
+ENV PYTHONPATH=/app
+
+CMD ["./run_purple.sh"]
