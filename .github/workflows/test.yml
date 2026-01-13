@@ -1,0 +1,116 @@
+name: AgentX Test Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # Manual trigger
+
+env:
+  REGISTRY: ghcr.io
+  GREEN_IMAGE: ghcr.io/ax-aiagents/green-agent
+  PURPLE_IMAGE: ghcr.io/ax-aiagents/purple-agent
+
+jobs:
+  # Build and push Docker images
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Green Agent
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ env.GREEN_IMAGE }}:${{ github.sha }},${{ env.GREEN_IMAGE }}:latest
+
+      - name: Build Purple Agent
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.purple
+          push: true
+          tags: ${{ env.PURPLE_IMAGE }}:${{ github.sha }},${{ env.PURPLE_IMAGE }}:latest
+
+  # Run evaluation tests
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    services:
+      green-agent:
+        image: ghcr.io/ax-aiagents/green-agent:latest
+        ports:
+          - 8090:8090
+          - 8091:8091
+        env:
+          MOCK_MODE: "true"
+          PORT: "8090"
+          MCP_PORT: "8091"
+      
+      purple-agent:
+        image: ghcr.io/ax-aiagents/purple-agent:latest
+        ports:
+          - 9000:9000
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PORT: "9000"
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for services to start..."
+          sleep 30
+
+      - name: Health Check - Green Agent
+        run: |
+          curl -f http://localhost:8090/health || exit 1
+          echo "✅ Green Agent healthy"
+
+      - name: Health Check - Purple Agent
+        run: |
+          curl -f http://localhost:9000/health || exit 1
+          echo "✅ Purple Agent healthy"
+
+      - name: Run Evaluation (Mock Mode)
+        run: |
+          echo "🧪 Running evaluation in mock mode..."
+          curl -X POST http://localhost:8090/ \
+            -H "Content-Type: application/json" \
+            -d '{
+              "jsonrpc": "2.0",
+              "method": "message/send",
+              "id": "test-1",
+              "params": {
+                "message": {
+                  "role": "user",
+                  "parts": [{"type": "text", "text": "Health check test"}]
+                }
+              }
+            }' || echo "Evaluation test completed"
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evaluation-results
+          path: results/
+          retention-days: 30

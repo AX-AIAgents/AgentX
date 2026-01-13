@@ -61,7 +61,7 @@ cache_tools = true           # Cache tool list after first fetch
 # Task Definitions
 # ----------------
 # REQUIRED: Must be provided via --task-file or here
-definitions_file = "../langchain_app/dataset_toolcall/task_definitions.jsonl"
+definitions_file = "src/data/task_definitions.jsonl"
 
 # Task filtering (optional)
 domain = ""                  # Filter by domain: storage, communication, search, etc.
