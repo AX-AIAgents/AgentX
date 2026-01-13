@@ -55,7 +55,7 @@ python src/mcp_http_server.py > mcp_server.log 2>&1 &
 MCP_PID=$!
 echo "   ✅ MCP Server starting... (PID: $MCP_PID)"
 echo "   📝 Logs: mcp_server.log"
-sleep 3  # Wait for MCP to initialize
+sleep 5  # Wait for MCP to initialize (increased from 3 to 5)
 
 # Check if MCP is running
 if ! kill -0 $MCP_PID 2>/dev/null; then
@@ -63,6 +63,21 @@ if ! kill -0 $MCP_PID 2>/dev/null; then
     cat mcp_server.log
     exit 1
 fi
+
+# Better health check: Try to connect to MCP
+echo "   🔍 Verifying MCP Server health..."
+for i in {1..10}; do
+    if curl -s http://localhost:8091/health > /dev/null 2>&1; then
+        echo "   ✅ MCP Server is healthy and responding"
+        break
+    fi
+    if [ $i -eq 10 ]; then
+        echo "   ⚠️ MCP Server not responding to health checks"
+        echo "   📋 MCP Server logs:"
+        cat mcp_server.log
+    fi
+    sleep 1
+done
 
 # Start Green Agent (A2A Server) in FOREGROUND
 # This is the main process that AgentBeats monitors!
