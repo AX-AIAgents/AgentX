@@ -190,6 +190,44 @@ if __name__ == "__main__":
 
     # Build Starlette app and add custom routes
     app = server.build()
+    
+    # Override agent card endpoint to include extensions
+    @app.get("/.well-known/agent.json")
+    async def custom_agent_card():
+        """Custom agent card with MCP endpoint in extensions."""
+        # Get base URL from request
+        public_url = os.getenv("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}"
+        
+        return {
+            "name": agent_card.name,
+            "description": agent_card.description,
+            "url": public_url,
+            "version": agent_card.version,
+            "protocolVersion": "0.3.0",
+            "defaultInputModes": agent_card.default_input_modes,
+            "defaultOutputModes": agent_card.default_output_modes,
+            "capabilities": {
+                "streaming": agent_card.capabilities.streaming if agent_card.capabilities else False,
+            },
+            "skills": [
+                {
+                    "id": skill.id,
+                    "name": skill.name,
+                    "description": skill.description,
+                    "tags": skill.tags,
+                    "examples": skill.examples,
+                }
+                for skill in (agent_card.skills or [])
+            ],
+            # CRITICAL: Extensions with MCP endpoint
+            "extensions": {
+                "mcp_endpoint": f"{public_url}/mcp",
+                "mock_mode": os.getenv("MOCK_MODE", "true"),
+                "supported_domains": ["notion", "gmail", "google-drive", "youtube", "search"],
+                "scoring_system": "3D (action, argument, efficiency)",
+            },
+        }
+    
     app.add_route("/health", health_check, methods=["GET"])
     app.add_route("/reset", reset_agent, methods=["POST"])
     # MCP proxy - forward requests to internal MCP server
