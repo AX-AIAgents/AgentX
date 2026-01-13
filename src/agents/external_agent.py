@@ -25,8 +25,18 @@ load_dotenv()
 
 app = FastAPI(title="OpenAI A2A Agent")
 
-# OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# OpenAI client - lazy initialization
+_client = None
+
+def get_openai_client():
+    """Get or create OpenAI client."""
+    global _client
+    if _client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable not set")
+        _client = OpenAI(api_key=api_key)
+    return _client
 
 # State
 conversation_history = []
@@ -250,7 +260,7 @@ USE THEM ALL as needed to complete the task fully."""
         print(f"🤖 Calling OpenAI with {len(openai_tools)} tools, {len(messages)} messages")
         print(f"   Last message roles: {[m.get('role') for m in messages[-3:]]}")
         
-        response = client.chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
             tools=openai_tools if openai_tools else None,

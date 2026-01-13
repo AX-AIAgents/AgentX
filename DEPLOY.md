@@ -1,36 +1,40 @@
-Evet, **hem Green Agent hem de baseline Purple Agent'ı dockerize etmen gerekiyor.** Kaynaklara göre Phase 1 (Green Agent) aşamasında, benchmark'ın uçtan uca (end-to-end) ve manuel müdahale olmadan çalışabilmesi için tüm bileşenlerin konteynerize edilmiş olması zorunludur.
+GHCR'ye yükleme yaparak teknik altyapıyı sağlamlaştırdın; ancak AgentBeats ekosisteminde yerel test aşamasından (**localhost**) platform tabanlı değerlendirme aşamasına geçmek için izlemen gereken yol haritası şu şekildedir:
 
-İşte Green Agent ve baseline Purple Agent'ını AgentBeats standartlarına göre dockerize etmen için izlemen gereken adım adım yol haritası:
+### 1. Kontrolör (Controller) Entegrasyonu ve `run.sh` Hazırlığı
+Yerelde çalıştırdığın `python run.py ...` komutunu AgentBeats'in anlayabileceği bir yapıya dönüştürmelisin.
+*   **run.sh oluştur:** Proje kök dizinine bir `run.sh` dosyası ekle ve içine yerelde kullandığın komutu yaz: `python src/run.py --task-file data/task_definitions.jsonl --external-agent $EXTERNAL_AGENT_URL`.
+*   **Earthshaker Kurulumu:** `pip install earthshaker` komutuyla SDK'yı yükle.
+*   **Procfile:** Konteynerin kontrolörü başlatabilmesi için bir `Procfile` oluştur ve içine `web: agentbeats run_ctrl` satırını ekle.
 
-### 1. Adım: Baseline Purple Agent'ı Neden Dockerize Etmelisin?
-Phase 1 teslimatında, Green Agent'ın (değerlendirici) görevlerini nasıl yerine getirdiğini ve puanladığını göstermek için **en az bir adet A2A uyumlu baseline Purple Agent** sunman zorunludur. Platformun bu testi otomatik olarak (GitHub Actions üzerinden) çalıştırabilmesi için her iki ajanın da bir Docker registry'sinde (Docker Hub, Google Artifact Registry vb.) imaj olarak bulunması gerekir.
+### 2. Bulut Dağıtımı (Deployment) ve HTTPS Şartı
+Yerel testte kullandığın `http://localhost:9000` adresi platform üzerinden erişilemez.
+*   **Public IP ve TLS:** Ajanlarının internete açık bir **Public IP**'ye sahip olması ve **TLS (HTTPS)** ile korunması zorunludur.
+*   **Cloud Run Önerisi:** Manuel HTTPS sertifikasıyla uğraşmamak için Docker imajlarını **Google Cloud Run**'a dağıtabilirsin; bu sistem otomatik olarak TLS sağlar.
 
-### 2. Adım: Proje Yapısını Hazırlama
-Her ajan (Green ve Purple) için kök dizinde şu iki kritik dosyayı oluşturmalısın:
-*   **run.sh:** Ajanı başlatan betik (Örn: `python main.py run`). Bu dosya `chmod +x run.sh` ile yürütülebilir olmalıdır.
-*   **Procfile:** AgentBeats Controller'ı başlatmak için gereklidir. İçeriği şu şekilde olmalıdır: `web: agentbeats run_ctrl`.
+### 3. AgentBeats Platform Kaydı
+Ajanların bulutta çalışmaya başladığında, onları resmi sisteme bağlamalısın:
+*   **Kayıt:** `agentbeats.org` adresine git ve hem Green hem de Purple ajanlarını kaydet.
+*   **Controller URL:** Kayıt formuna ajanının buluttaki HTTPS adresini (Controller URL) gir.
 
-### 3. Adım: Dockerfile Oluşturma
-Her iki ajan için de (veya tüm sistemi tek imajda topluyorsan o sistem için) bir Dockerfile yazmalısın.
-*   **Bağımlılıklar:** `pip install earthshaker` (AgentBeats SDK) ve projenin diğer gereksinimlerini (`requirements.txt`) eklediğinden emin ol.
-*   **İpucu:** Google Cloud Buildpacks kullanarak Dockerfile yazmadan da imaj oluşturabilirsin ancak manuel kontrol için standart bir Dockerfile önerilir.
+### 4. Senaryo ve Liderlik Tablosu (Leaderboard) Kurulumu
+Platformun testleri otomatik koordine edebilmesi için bir yapılandırma gerekir:
+*   **Scenario.toml:** Testlerin nasıl koordine edileceğini (hangi ajanların hangi tasklarla yarışacağını) belirleyen bir `scenario.toml` dosyası hazırla. Bu dosya bir **"reproducibility artifact"** (yeniden üretilebilirlik nesnesi) olarak kabul edilir.
+*   **GitHub Sonuç Reposu:** Sonuçların JSON olarak merge edileceği bir GitHub reposu oluştur ve bu repoyu platformdaki Green Agent'ına bağla.
 
-### 4. Adım: İmajları Registry'ye Yükleme
-İmajlarını oluşturduktan sonra (build), bunları **herkese açık (public)** bir Docker registry'sine yüklemelisin:
-1.  `docker build -t kullanıcı_adı/green-agent:v1 .`
-2.  `docker push kullanıcı_adı/green-agent:v1`
-*(Aynı işlemi baseline Purple Agent için de yapmalısın).*
+### 5. GitHub Actions ve Otomasyon
+Yerelde manuel başlattığın testleri platformun otomatize etmesi için:
+*   **Webhook:** AgentBeats'in sağladığı webhook değerlerini GitHub depona ekle; böylece sonuçlar merge edildiğinde platform otomatik güncellenir.
+*   **Actions İş akışı:** Testleri GitHub Actions üzerinde çalışacak şekilde yapılandırarak her kod değişiminde veya senaryo tetiklendiğinde testlerin konteyner içinde otomatik koşmasını sağla.
 
-### 5. Adım: AgentBeats Üzerinde Kayıt ve Bağlantı
-İmajların hazır olduktan sonra AgentBeats platformuna giderek şunları yapmalısın:
-*   **Green Agent Kaydı:** Oluşturduğun Green Agent imajının URL'sini ve Controller URL'sini sisteme gir.
-*   **Purple Agent Kaydı:** Baseline Purple Agent'ını da aynı şekilde kaydet.
-*   **Scenario.toml Güncellemesi:** Test senaryonu tanımlayan `scenario.toml` dosyasında, her iki ajanın Docker imaj referanslarını belirterek sistemi birbirine bağla.
+### 6. Phase 1 Final Teslimat Materyalleri
+**15 Ocak 2026** tarihine kadar şu bileşenleri hazırlayıp sunman şarttır:
+*   **Abstract:** Ajanın hangi görevleri değerlendirdiğine dair kısa özet.
+*   **README:** Kodun nasıl çalıştırılacağını anlatan detaylı dokümantasyon.
+*   **Demo Videosu:** Sistemin uçtan uca çalışmasını gösteren maksimum 3 dakikalık video.
 
-### 6. Adım: Yeniden Üretilebilirlik (Reproducibility) Kontrolü
-Sistemin Docker üzerinde çalışırken **otomatik reset (sıfırlama)** özelliğine sahip olması gerekir. AgentBeats platformu, her test çalışmasından önce Purple Agent'ı "temiz bir duruma" getirmek için Docker konteynerini otomatik olarak yeniden başlatacaktır.
+**Özetle:** Şu an elinde çalışan bir **"kod parçası"** var; ancak yarışmayı tamamlamak için bu kodu bir **"canlı servise"** (Cloud/TLS) dönüştürmeli ve resmi **"hakem paneline"** (AgentBeats Platform & Leaderboard) kaydetmelisin.
 
-**Özetle:** Sadece Green Agent'ı dockerize etmek Phase 1'in teknik şartını karşılar gibi görünse de, sistemin **çalışabilir ve doğrulanabilir** olması için baseline Purple Agent'ının da dockerize edilip platforma bu şekilde tanıtılması "uçtan uca" çalışma prensibi için şarttır.
+***
 
 **Anlaşılması kolay bir benzetme:**
-Green Agent bir **"Sınav Kağıdı"**, Purple Agent ise **"Öğrenci"** gibidir. Sınavın adil ve tekrarlanabilir olması için hem sınav kağıdının (Green) hem de örnek öğrencinin (Purple) aynı kontrollü laboratuvar koşullarında (Docker konteyneri) bulunması gerekir. Biri dışarıda kalırsa, laboratuvarın steril ortamı bozulur.
+Şu an evinin bahçesinde (localhost) antrenman yapan bir **sporcun (Green Agent)** ve onun bir **rakibi (Purple Agent)** var. Yarışmaya katılmak için sporcularını **resmi stadyuma (Cloud)** götürmeli, **isimlerini listeye (Platform Registration)** yazdırmalı ve maçların hangi gün hangi saatte yapılacağını belirten **fikstürü (Scenario.toml)** onaylatmalısın. Sonuçlar ancak stadyumun **tabelasında (Leaderboard)** göründüğünde resmiyet kazanır.
