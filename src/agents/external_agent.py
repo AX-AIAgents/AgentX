@@ -100,6 +100,23 @@ async def handle_message(request: A2ARequest) -> dict:
     
     This is where your agent logic goes!
     """
+    try:
+        # Check if OpenAI client can be initialized
+        get_openai_client()
+    except ValueError as e:
+        # Return error response if API key is missing
+        return {
+            "jsonrpc": "2.0",
+            "id": request.id,
+            "error": {
+                "code": -32000,
+                "message": f"Server configuration error: {str(e)}",
+                "data": {
+                    "details": "OPENAI_API_KEY environment variable must be set on the server"
+                }
+            }
+        }
+    
     message = request.params.get("message", {})
     role = message.get("role", "user")
     parts = message.get("parts", [])
@@ -186,6 +203,13 @@ async def decide_action_with_llm(text: str, tool_results: list) -> dict:
     """
     Use OpenAI GPT-4o-mini to decide next action.
     """
+    try:
+        # Ensure OpenAI client is initialized
+        client = get_openai_client()
+    except ValueError as e:
+        # Return error if client can't be initialized
+        raise RuntimeError(f"Client not initialized: {str(e)}")
+    
     # Fetch tools from MCP
     mcp_tools = await fetch_tools_from_mcp()
     openai_tools = build_openai_tools(mcp_tools)

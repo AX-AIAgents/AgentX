@@ -3,7 +3,7 @@ name = "agentx"
 version = "0.1.0"
 description = "Green Agent (Assessor) for Custom MCP Task Evaluation"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 dependencies = [
     "a2a-sdk>=0.2.0",
     "mcp>=1.0.0",
@@ -16,6 +16,7 @@ dependencies = [
     "loguru>=0.7.0",
     "python-dotenv>=1.0.0",
     "langchain-mcp-adapters>=0.2.1",
+    "earthshaker>=0.1.0",
 ]
 
 [build-system]
