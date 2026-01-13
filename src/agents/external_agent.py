@@ -164,7 +164,36 @@ async def handle_message(request: A2ARequest) -> dict:
         print(f"   → Added to history as: tool_results only ({len(tool_results)} results)")
     
     # Decide what to do using OpenAI
-    return await decide_action_with_llm(text, tool_results)
+    try:
+        return await decide_action_with_llm(text, tool_results)
+    except RuntimeError as e:
+        # Return JSON-RPC error for initialization issues
+        return {
+            "jsonrpc": "2.0",
+            "id": request.id,
+            "error": {
+                "code": -32000,
+                "message": str(e),
+                "data": {
+                    "details": "Server configuration error - check environment variables"
+                }
+            }
+        }
+    except Exception as e:
+        # Return JSON-RPC error for other issues
+        import traceback
+        traceback.print_exc()
+        return {
+            "jsonrpc": "2.0",
+            "id": request.id,
+            "error": {
+                "code": -32603,
+                "message": f"Internal error: {str(e)}",
+                "data": {
+                    "type": type(e).__name__
+                }
+            }
+        }
 
 
 async def fetch_tools_from_mcp():
