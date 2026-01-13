@@ -213,3 +213,20 @@ curl https://agentx-purple.onrender.com/debug/env
 5. Demo video çek
 6. Abstract yaz
 7. 15 Ocak'ta teslim et! 🚀
+
+
+cd /Users/huseyin/Documents/LLM/agentx
+
+# Green Agent - Docker Hub + GHCR
+docker build -t artificax/green-agent:v1 -f Dockerfile . && \
+docker tag artificax/green-agent:v1 ghcr.io/ax-aiagents/green-agent:v1 && \
+docker push artificax/green-agent:v1 && \
+docker push ghcr.io/ax-aiagents/green-agent:v1 && \
+echo "✅ Green Agent v1 pushed to Docker Hub and GHCR!"
+
+# Purple Agent - Docker Hub + GHCR
+docker build -t artificax/purple-agent:v1 -f Dockerfile.purple . && \
+docker tag artificax/purple-agent:v1 ghcr.io/ax-aiagents/purple-agent:v1 && \
+docker push artificax/purple-agent:v1 && \
+docker push ghcr.io/ax-aiagents/purple-agent:v1 && \
+echo "✅ Purple Agent v1 pushed to Docker Hub and GHCR!"

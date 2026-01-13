@@ -54,6 +54,12 @@ RUN chmod +x run.sh
 # Create directories for logs and results
 RUN mkdir -p results historical_trajectories
 
+# Create Gmail OAuth directory and dummy credentials for MOCK_MODE
+RUN mkdir -p /root/.gmail-mcp && \
+    echo '{"web":{"client_id":"dummy-client-id","client_secret":"dummy-secret","redirect_uris":["http://localhost"],"auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token"}}' > /root/.gmail-mcp/gcp-oauth.keys.json && \
+    echo '{"type":"authorized_user","client_id":"dummy-client-id","client_secret":"dummy-secret","refresh_token":"dummy-refresh-token"}' > /root/.gmail-mcp/credentials.json && \
+    echo '{"access_token":"dummy-access-token","expires_in":3599,"refresh_token":"dummy-refresh-token","scope":"https://mail.google.com/","token_type":"Bearer"}' > /root/.gmail-mcp/token.json
+
 # Expose ports
 # 8090: Green Agent (A2A) - controlled by AGENT_PORT env var
 # 8091: MCP Server (Tools)
@@ -67,6 +73,11 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
 ENV PYTHONPATH=/app
 ENV MCP_PORT=8091
 ENV MOCK_MODE=true
+
+# Dummy API keys for MCP servers (MOCK_MODE=true so not actually used)
+ENV SERPER_API_KEY=dummy_serper_key_for_mock_mode
+ENV NOTION_TOKEN=dummy_notion_token_for_mock_mode
+ENV GOOGLE_DRIVE_OAUTH_CREDENTIALS=dummy_gdrive_oauth_for_mock_mode
 
 # Start with run.sh (respects AGENT_PORT from AgentBeats Controller)
 CMD ["./run.sh"]
