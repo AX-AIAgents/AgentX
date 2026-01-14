@@ -67,8 +67,18 @@ def main():
     
     # Set environment variables
     os.environ["PORT"] = str(args.port)
-    if args.mcp_endpoint:
-        os.environ["MCP_ENDPOINT"] = args.mcp_endpoint
+    
+    # MCP Endpoint resolution (support both MCP_ENDPOINT and MCP_PORT)
+    mcp_endpoint = args.mcp_endpoint
+    if not mcp_endpoint:
+        mcp_port = os.getenv("MCP_PORT", "8091")
+        # In Docker, green-agent is the container name
+        green_host = os.getenv("GREEN_AGENT_HOST", "green-agent")
+        mcp_endpoint = f"http://{green_host}:{mcp_port}"
+        print(f"🔍 MCP endpoint constructed from MCP_PORT: {mcp_endpoint}")
+    
+    args.mcp_endpoint = mcp_endpoint
+    os.environ["MCP_ENDPOINT"] = mcp_endpoint
     
     # Build Agent Card
     agent_url = args.card_url or f"http://{args.host}:{args.port}/"
