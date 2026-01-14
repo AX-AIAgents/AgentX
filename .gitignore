@@ -32,8 +32,9 @@ Thumbs.db
 .ab/
 
 # Results (runtime)
-results/
-historical_trajectories/
+# results/
+# historical_trajectories/
+docs/
 
 # Cache
 .cache/

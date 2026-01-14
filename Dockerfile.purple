@@ -1,13 +1,19 @@
 # ========================================
 # AgentX Purple Agent - Dockerfile
 # ========================================
-# Baseline A2A Agent for testing
+# AgentBeats Compatible Purple Agent (Participant)
+# 
+# Build:
+#   docker build --platform linux/amd64 -f Dockerfile.purple -t ghcr.io/USERNAME/agentx-purple:v1 .
+#
+# Run:
+#   docker run -p 9000:9000 -e OPENAI_API_KEY=xxx ghcr.io/USERNAME/agentx-purple:v1
 # ========================================
 
-FROM python:3.13-slim
+FROM --platform=linux/amd64 python:3.13-slim
 
 LABEL maintainer="AgentX Team"
-LABEL description="AgentX Purple Agent - Baseline A2A Agent"
+LABEL description="AgentX Purple Agent - OpenAI GPT-4o-mini A2A Agent"
 LABEL version="1.0.0"
 
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -29,10 +35,10 @@ COPY pyproject.toml uv.lock README.md ./
 # Install dependencies (creates .venv)
 RUN uv sync --frozen --no-dev
 
-# Copy only Purple Agent code
+# Copy Purple Agent code
 COPY src/agents/ ./src/agents/
+COPY src/messenger.py ./src/
 COPY src/__init__.py ./src/
-COPY run_purple.py ./
 
 # Set environment
 ENV PYTHONPATH=/app
@@ -44,4 +50,6 @@ EXPOSE 9000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
   CMD curl -f http://localhost:${PORT:-9000}/health || exit 1
 
-CMD ["/app/.venv/bin/python", "run_purple.py"]
+# AgentBeats required: ENTRYPOINT with --host, --port, --card-url support
+ENTRYPOINT ["uv", "run", "src/agents/server.py"]
+CMD ["--host", "0.0.0.0", "--port", "9000"]

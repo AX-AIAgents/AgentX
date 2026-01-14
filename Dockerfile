@@ -1,11 +1,16 @@
 # ========================================
 # AgentX Green Agent - Dockerfile
 # ========================================
-# Phase 1 Teslimat: Green Agent (Assessor) + MCP Server
-# AgentBeats Competition Ready
+# AgentBeats Compatible Green Agent (Assessor)
+# 
+# Build:
+#   docker build --platform linux/amd64 -t ghcr.io/USERNAME/agentx-green:v1 .
+#
+# Run:
+#   docker run -p 8090:8090 -e OPENAI_API_KEY=xxx ghcr.io/USERNAME/agentx-green:v1
 # ========================================
 
-FROM python:3.13-slim
+FROM --platform=linux/amd64 python:3.13-slim
 
 # Metadata
 LABEL maintainer="AgentX Team"
@@ -46,10 +51,7 @@ RUN uv sync --frozen --no-dev
 
 # Copy application code (includes src/data with task_definitions.jsonl)
 COPY src/ ./src/
-COPY run.sh scenario.toml ./
-
-# Make scripts executable
-RUN chmod +x run.sh
+COPY scenario.toml ./
 
 # Create directories for logs and results
 RUN mkdir -p results historical_trajectories
@@ -79,5 +81,6 @@ ENV SERPER_API_KEY=dummy_serper_key_for_mock_mode
 ENV NOTION_TOKEN=dummy_notion_token_for_mock_mode
 ENV GOOGLE_DRIVE_OAUTH_CREDENTIALS=dummy_gdrive_oauth_for_mock_mode
 
-# Start with run.sh (respects AGENT_PORT from AgentBeats Controller)
-CMD ["./run.sh"]
+# AgentBeats required: ENTRYPOINT with --host, --port, --card-url support
+ENTRYPOINT ["uv", "run", "src/server.py"]
+CMD ["--host", "0.0.0.0", "--port", "8090"]

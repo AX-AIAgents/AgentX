@@ -19,6 +19,9 @@ dependencies = [
     "earthshaker>=0.1.0",
 ]
 
+[project.scripts]
+agentbeats-run = "src.agentbeats.run_scenario:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

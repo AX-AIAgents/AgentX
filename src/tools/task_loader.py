@@ -85,6 +85,13 @@ class TaskLoader:
         self._tasks: list[TaskDefinition] = []
         self._loaded = False
     
+    @property
+    def tasks(self) -> list[TaskDefinition]:
+        """Get all tasks, loading if not already loaded."""
+        if not self._loaded:
+            self.load_all()
+        return self._tasks
+    
     def load_all(self) -> list[TaskDefinition]:
         """Load all tasks from the JSONL file."""
         if not self.file_path.exists():

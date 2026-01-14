@@ -1,166 +1,37 @@
-# AgentX Evaluation Scenario Configuration
-# ==========================================
-# A2A Protocol-Based Agent Evaluation System
+# AgentX Evaluation Scenario
+# ==========================
+# AgentBeats Compatible Configuration
 #
-# System Architecture:
-# - Green Agent (Assessor): Evaluates agents via A2A protocol @ port 8090
-# - Purple Agent (Assessee): External agent being tested @ configurable URL
-# - MCP Server (Tool Provider): Provides 76 tools via HTTP @ port 8091
-# - run.py (Kickoff Script): Sends one message to start evaluation
-
-[server]
-# Server ports for Green Agent and MCP
-a2a_port = 8090              # Green Agent A2A server port
-mcp_port = 8091              # MCP HTTP server port
-host = "0.0.0.0"             # Bind to all interfaces
-
-[purple_agent]
-# Purple Agent Configuration
-# --------------------------
-# Purple Agent runs EXTERNALLY and must be started separately.
-# The system evaluates ANY A2A-compatible agent at the specified URL.
+# Usage:
+#   uv run agentbeats-run scenario.toml
 #
-# Current Implementation: OpenAI GPT-4o-mini powered agent
-# File: src/agents/external_agent.py
-# Start command: python -m src.agents.external_agent
-url = "http://localhost:9000"
-model = "gpt-4o-mini"        # For documentation only (agent manages its own LLM)
+# Or manually:
+#   Terminal 1: python src/server.py --host 127.0.0.1 --port 8090
+#   Terminal 2: python src/agents/server.py --host 127.0.0.1 --port 9000
 
-# Custom Agent Support
-# --------------------
-# To evaluate your own agent:
-# 1. Implement A2A protocol (/.well-known/agent.json + /a2a/message)
-# 2. Start your agent on any port
-# 3. Update 'url' above or use --external-agent flag
-#
-# Example: --external-agent http://localhost:9000
-
+# Green Agent (Assessor) - Orchestrates evaluation
 [green_agent]
-# Green Agent (Assessor) Configuration
-# -------------------------------------
-assessor_id = "agentx-assessor"
-description = "AgentX Green Agent - A2A Protocol Evaluator"
+endpoint = "http://127.0.0.1:8090"
+cmd = "python src/server.py --host 127.0.0.1 --port 8090"
 
-# Evaluation behavior
-enable_guidance = false      # Don't send guidance messages (let agent decide)
-detect_loops = true          # Detect duplicate tool patterns
-max_duplicate_patterns = 2   # Break loop after N identical patterns
+# Purple Agent (Participant) - Being evaluated
+[[participants]]
+role = "purple_agent"
+endpoint = "http://127.0.0.1:9000"
+cmd = "python src/agents/server.py --host 127.0.0.1 --port 9000 --mcp-endpoint http://localhost:8091"
 
-[mcp]
-# MCP Server Configuration
-# ------------------------
-# Servers to load (comma-separated in env or here)
-enabled_servers = ["notion", "gmail", "search", "youtube", "google-drive"]
-mock_mode = false            # Set true to use mock responses
+# Assessment Configuration
+[config]
+# Task configuration
+task_file = "src/data/task_definitions.jsonl"
+task_ids = [0, 1]            # 2 task için test
+max_turns = 10               # Daha hızlı test için azaltıldı
 
-# Tool discovery
-auto_discover = true         # Fetch tools dynamically from MCP
-cache_tools = true           # Cache tool list after first fetch
+# MCP configuration
+mcp_port = 8091
+mock_mode = true
 
-[tasks]
-# Task Definitions
-# ----------------
-# REQUIRED: Must be provided via --task-file or here
-definitions_file = "src/data/task_definitions.jsonl"
-
-# Task filtering (optional)
-domain = ""                  # Filter by domain: storage, communication, search, etc.
-difficulty = ""              # Filter by difficulty: easy, medium, hard
-task_ids = []                # Specific task indices (empty = all tasks)
-
-# Task execution
-max_turns = 30               # Maximum turns per task
-response_timeout = 60        # Seconds to wait for agent response
-
-[scoring]
-# 3D Scoring System
-# -----------------
-# Total Score = action_weight * action_score + 
-#               argument_weight * argument_score + 
-#               efficiency_weight * efficiency_score
-
-method = "mcp_3d"
-
-# Score weights (must sum to 1.0)
-action_weight = 0.5          # 50%: Did agent call required tools?
-argument_weight = 0.4        # 40%: Were tool arguments correct?
-efficiency_weight = 0.1      # 10%: Did agent complete optimally?
-
-# Action scoring
-action_partial_credit = true # Give credit for partially matched tools
-
-# Argument scoring
-argument_strict_mode = false # false: allow missing optional args
-argument_type_check = true   # Validate argument types
-
-# Efficiency scoring
-optimal_steps_multiplier = 1.0  # Optimal = expected_actions count
-max_steps_multiplier = 2.0      # Max = optimal * 2
-
-[conversation]
-# Conversation History Management
-# --------------------------------
-reset_on_new_task = true     # Clear history when new task starts (CRITICAL)
-track_tool_call_ids = true   # Match OpenAI tool_call IDs (REQUIRED for OpenAI)
-max_history_entries = 50     # Limit conversation history size
-
-# Completion detection
-completion_keywords = ["task complete", "[done]", "finished", "[task_complete]"]
-detect_premature_completion = true
-
-[debugging]
-# Debug Configuration
-# -------------------
-verbose = true               # Print detailed logs
-log_openai_calls = true      # Log OpenAI API calls (Purple Agent)
-log_tool_executions = true   # Log MCP tool calls (Green Agent)
-log_conversation_flow = true # Log message roles and sequence
-
-# Log levels per component
-green_agent_log = "INFO"     # Green Agent: INFO, DEBUG
-purple_agent_log = "INFO"    # Purple Agent: INFO, DEBUG  
-mcp_log = "INFO"             # MCP Server: INFO, DEBUG
-
-[output]
-# Output Configuration
-# --------------------
-results_dir = "results"                    # Evaluation results directory
-save_conversations = true                  # Save full conversation history
-save_tool_calls = true                     # Save tool execution details
-filename_format = "eval_{timestamp}.json"  # Result filename format
-
-# Report generation
-generate_summary = true      # Print summary after evaluation
-summary_format = "compact"   # compact | detailed
-
-[environment]
-# Environment Variables
-# ---------------------
-# These are read from .env file or system environment
-# Required:
-#   - OPENAI_API_KEY: For Purple Agent (OpenAI)
-#   - Google credentials: For Google Drive/Sheets tools
-#   - NOTION_TOKEN: For Notion tools
-env_file = ".env"
-load_dotenv = true
-
-[advanced]
-# Advanced Configuration
-# ----------------------
-# Agent-to-Agent Protocol
-a2a_protocol_version = "2.0"
-a2a_json_rpc_version = "2.0"
-
-# MCP Protocol
-mcp_protocol_version = "0.1.0"
-mcp_http_timeout = 600       # Seconds
-
-# Performance
-parallel_task_execution = false  # Run tasks sequentially
-async_tool_execution = true      # Execute tools asynchronously
-
-# Reproducibility
-# random_seed = 42                 # Set for deterministic evaluation (currently disabled)
-timestamp_format = "%Y%m%d_%H%M%S"
-
-
+# Scoring weights (must sum to 1.0)
+action_weight = 0.5          # Did agent call required tools?
+argument_weight = 0.4        # Were tool arguments correct?
+efficiency_weight = 0.1      # Did agent complete optimally?
