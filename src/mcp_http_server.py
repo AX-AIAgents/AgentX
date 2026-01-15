@@ -479,7 +479,8 @@ async def list_tools_http(request):
             {
                 "name": t.name,
                 "description": t.description,
-                "parameters": t.inputSchema,
+                "inputSchema": t.inputSchema,  # Purple Agent expects this
+                "parameters": t.inputSchema,   # Keep for compatibility
             }
             for t in tools
         ],
