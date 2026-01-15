@@ -40,7 +40,7 @@ class TaskScore(BaseModel):
 class EvalResult(BaseModel):
     """Final evaluation result."""
     assessment_id: str
-    purple_agent: str
+    agent: str
     tasks: list[TaskScore]
     summary: dict[str, Any]
 
@@ -56,7 +56,7 @@ class Agent:
     """
     
     # Required participants for this assessment
-    required_roles: list[str] = ["purple_agent"]
+    required_roles: list[str] = ["agent"]
     
     # Required config keys
     required_config_keys: list[str] = []  # task_ids and max_turns are optional
@@ -106,7 +106,7 @@ class Agent:
             return
         
         # Extract configuration
-        purple_agent_url = str(request.participants["purple_agent"])
+        purple_agent_url = str(request.participants["agent"])
         task_ids = request.config.get("task_ids", [])
         max_turns = request.config.get("max_turns", 30)
         
@@ -237,7 +237,7 @@ class Agent:
         
         return EvalResult(
             assessment_id=assessment_id,
-            purple_agent=purple_agent_url,
+            agent=purple_agent_url,
             tasks=task_scores,
             summary={
                 "total_tasks": total,

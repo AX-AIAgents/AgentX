@@ -11,7 +11,7 @@ env = { MOCK_MODE = "true", LOG_LEVEL = "INFO", MCP_PORT = "8091" }
 
 [[participants]]
 agentbeats_id = "019bc0c0-f1b7-70d3-bada-5fea2bfdeeb2"
-name = "purple_agent"
+name = "agent"
 env = { OPENAI_API_KEY = "${OPENAI_API_KEY}", MCP_PORT = "8091" }
 
 [config]

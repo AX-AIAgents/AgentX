@@ -16,7 +16,7 @@ cmd = "python src/server.py --host 127.0.0.1 --port 8090"
 
 # Purple Agent (Participant) - Being evaluated
 [[participants]]
-role = "purple_agent"
+role = "agent"
 endpoint = "http://127.0.0.1:9000"
 cmd = "python src/agents/server.py --host 127.0.0.1 --port 9000 --mcp-endpoint http://localhost:8091"
 
