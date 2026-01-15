@@ -162,20 +162,39 @@ async def shutdown_mcp_client():
 
 
 def _create_mock_tools() -> list[Any]:
-    """Create mock tool objects from mock response definitions."""
+    """Create mock tool objects from mock response definitions with real schemas."""
+    import json
+    from pathlib import Path
     from src.tools.mock_tools import ALL_MOCK_RESPONSES
     
+    # Load real schemas from JSON file
+    schema_file = Path(__file__).parent / "tools" / "tool_schemas.json"
+    tool_schemas = {}
+    if schema_file.exists():
+        with open(schema_file) as f:
+            tool_schemas = json.load(f)
+        print(f"📋 Loaded schemas for {len(tool_schemas)} tools")
+    
     class MockTool:
-        """Simple tool wrapper for mock mode."""
-        def __init__(self, name: str):
+        """Simple tool wrapper for mock mode with real schemas."""
+        def __init__(self, name: str, description: str = "", args: dict = None):
             self.name = name
-            self.description = f"Execute {name}"
-            self.args = {}  # Empty args - schema not needed for mock mode
+            self.description = description or f"Execute {name}"
+            self.args = args or {}
         
         def invoke(self, arguments: dict) -> dict:
             return {}
     
-    return [MockTool(name) for name in ALL_MOCK_RESPONSES.keys()]
+    tools = []
+    for name in ALL_MOCK_RESPONSES.keys():
+        schema = tool_schemas.get(name, {})
+        tools.append(MockTool(
+            name=name,
+            description=schema.get("description", f"Execute {name}"),
+            args=schema.get("args", {}),
+        ))
+    
+    return tools
 
 
 def reset_tracking():
@@ -536,15 +555,15 @@ async def startup():
     """Initialize on startup."""
     global _loaded_tools, _tool_map, _active_servers
     
-    # if MOCK_MODE:
-    #     print("\n🚀 Starting in MOCK_MODE - loading mock tools...")
-    #     # In mock mode, we don't need real MCP clients
-    #     # Just register the mock tools directly
-    #     _loaded_tools = _create_mock_tools()
-    #     _tool_map = {tool.name: tool for tool in _loaded_tools}
-    #     _active_servers = ["mock"]
-    #     print(f"✅ Loaded {len(_loaded_tools)} mock tools")
-    # else:
+    if MOCK_MODE:
+        print("\n🚀 Starting in MOCK_MODE - loading mock tools...")
+        # In mock mode, we don't need real MCP clients
+        # Just register the mock tools directly
+        _loaded_tools = _create_mock_tools()
+        _tool_map = {tool.name: tool for tool in _loaded_tools}
+        _active_servers = ["mock"]
+        print(f"✅ Loaded {len(_loaded_tools)} mock tools")
+    else:
         print("\n🚀 Initializing MCP servers...")
         await initialize_mcp_client(DEFAULT_SERVERS)
 
