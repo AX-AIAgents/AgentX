@@ -1,0 +1,22 @@
+services:
+  green-agent:
+    image: ghcr.io/ax-aiagents/green-agent:v0
+    container_name: green-agent
+    ports:
+      - "9009:9009"
+      - "8091:8091"
+    environment:
+      - MOCK_MODE=true
+      - LOG_LEVEL=INFO
+      - MCP_PORT=8091
+
+  purple_agent:
+    image: ghcr.io/ax-aiagents/purple-agent:v0
+    container_name: purple_agent
+    ports:
+      - "9010:9009"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MCP_PORT=8091
+    depends_on:
+      - green-agent

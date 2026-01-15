@@ -536,15 +536,15 @@ async def startup():
     """Initialize on startup."""
     global _loaded_tools, _tool_map, _active_servers
     
-    if MOCK_MODE:
-        print("\n🚀 Starting in MOCK_MODE - loading mock tools...")
-        # In mock mode, we don't need real MCP clients
-        # Just register the mock tools directly
-        _loaded_tools = _create_mock_tools()
-        _tool_map = {tool.name: tool for tool in _loaded_tools}
-        _active_servers = ["mock"]
-        print(f"✅ Loaded {len(_loaded_tools)} mock tools")
-    else:
+    # if MOCK_MODE:
+    #     print("\n🚀 Starting in MOCK_MODE - loading mock tools...")
+    #     # In mock mode, we don't need real MCP clients
+    #     # Just register the mock tools directly
+    #     _loaded_tools = _create_mock_tools()
+    #     _tool_map = {tool.name: tool for tool in _loaded_tools}
+    #     _active_servers = ["mock"]
+    #     print(f"✅ Loaded {len(_loaded_tools)} mock tools")
+    # else:
         print("\n🚀 Initializing MCP servers...")
         await initialize_mcp_client(DEFAULT_SERVERS)
 

@@ -6,11 +6,11 @@
 # ============================================
 
 [green_agent]
-agentbeats_id = "019bbdce-185b-7eb3-bfda-ea6febec9b09"
+agentbeats_id = "019bc0bd-07f9-7753-8850-98cfdb6cb24c"
 env = { MOCK_MODE = "true", LOG_LEVEL = "INFO", MCP_PORT = "8091" }
 
 [[participants]]
-agentbeats_id = "019bbdd0-1a9e-78c2-b8db-b6f45ab462c3"
+agentbeats_id = "019bc0c0-f1b7-70d3-bada-5fea2bfdeeb2"
 name = "purple_agent"
 env = { OPENAI_API_KEY = "${OPENAI_API_KEY}", MCP_PORT = "8091" }
 
