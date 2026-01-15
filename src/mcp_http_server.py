@@ -182,6 +182,28 @@ def _create_mock_tools() -> list[Any]:
             self.description = description or f"Execute {name}"
             self.args = args or {}
         
+        @property
+        def inputSchema(self) -> dict:
+            """Convert args to OpenAI-compatible JSON Schema."""
+            if not self.args:
+                return {"type": "object", "properties": {}}
+            
+            # Build required list from args
+            required = []
+            for prop_name, prop_def in self.args.items():
+                if isinstance(prop_def, dict):
+                    # Not optional and no default = required
+                    is_optional = prop_def.get("optional", False)
+                    has_default = "default" in prop_def
+                    if not is_optional and not has_default:
+                        required.append(prop_name)
+            
+            return {
+                "type": "object",
+                "properties": self.args,
+                "required": required
+            }
+        
         def invoke(self, arguments: dict) -> dict:
             return {}
     
