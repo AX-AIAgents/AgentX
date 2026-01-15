@@ -162,7 +162,7 @@ async def shutdown_mcp_client():
 
 
 def _create_mock_tools() -> list[Any]:
-    """Create mock tool objects from mock response definitions with real schemas."""
+    """Create mock tool objects from real schemas only."""
     import json
     from pathlib import Path
     from src.tools.mock_tools import ALL_MOCK_RESPONSES
@@ -185,15 +185,18 @@ def _create_mock_tools() -> list[Any]:
         def invoke(self, arguments: dict) -> dict:
             return {}
     
+    # Only create tools that have both: schema AND mock response
     tools = []
-    for name in ALL_MOCK_RESPONSES.keys():
-        schema = tool_schemas.get(name, {})
-        tools.append(MockTool(
-            name=name,
-            description=schema.get("description", f"Execute {name}"),
-            args=schema.get("args", {}),
-        ))
+    for name, schema in tool_schemas.items():
+        # Only include tools that have mock responses
+        if name in ALL_MOCK_RESPONSES:
+            tools.append(MockTool(
+                name=name,
+                description=schema.get("description", f"Execute {name}"),
+                args=schema.get("args", {}),
+            ))
     
+    print(f"✅ Created {len(tools)} tools with real schemas")
     return tools
 
 
