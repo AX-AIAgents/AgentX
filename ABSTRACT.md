@@ -1,10 +1,10 @@
-# AgentX: Cross-API Orchestration Benchmark for Multi-Tool AI Agents
+# Cross-API Bench: Cross-API Orchestration Benchmark for Multi-Tool AI Agents
 
 ## Abstract
 
 Modern AI agents struggle with **Cross-API orchestration**—the ability to seamlessly chain operations across multiple heterogeneous service providers to complete complex enterprise workflows. While existing benchmarks focus on single-API tool calling, real-world productivity tasks require agents to coordinate between Google Workspace, Notion, email systems, and web services simultaneously.
 
-**AgentX** addresses this gap by introducing a comprehensive evaluation framework with **103 cross-API scenarios** spanning five enterprise domains. Our benchmark uniquely measures agents' ability to:
+**Cross-API Bench** addresses this gap by introducing a comprehensive evaluation framework with **103 cross-API scenarios** spanning five enterprise domains. Our benchmark uniquely measures agents' ability to:
 
 1. **Select appropriate tools** across 76 MCP-compatible endpoints from 5 different API providers
 2. **Pass correct parameters** with proper data types and semantic accuracy
@@ -28,7 +28,7 @@ Task: "Send an email"
 
 ### Cross-API Orchestration: Data Flow Across Providers
 
-AgentX evaluates **cross-API orchestration**—where outputs from one API become inputs to another:
+Cross-API Bench evaluates **cross-API orchestration**—where outputs from one API become inputs to another:
 
 ```
 Task: "Compile project updates and notify stakeholders"
@@ -100,7 +100,7 @@ Step 5: Gmail → Draft notification email
 
 ## Key Contributions
 
-1. **First Cross-API Benchmark**: Unlike single-API benchmarks, AgentX evaluates multi-provider orchestration
+1. **First Cross-API Benchmark**: Unlike single-API benchmarks, Cross-API Bench evaluates multi-provider orchestration
 2. **Real Enterprise Scenarios**: 103 tasks derived from actual productivity workflows
 3. **Reproducible Evaluation**: Containerized mock mode enables deterministic testing
 4. **Fine-Grained Scoring**: 3D metrics provide actionable insights beyond pass/fail
@@ -108,10 +108,10 @@ Step 5: Gmail → Draft notification email
 ## Citation
 
 ```bibtex
-@misc{agentx2026,
-  title={AgentX: Cross-API Orchestration Benchmark for Multi-Tool AI Agents},
+@misc{crossapibench2026,
+  title={Cross-API Bench: Cross-API Orchestration Benchmark for Multi-Tool AI Agents},
   author={AX-Artificial Intelligence Team},
   year={2026},
-  url={https://github.com/AX-Artificial-Intelligence/AgentX}
+  url={https://github.com/AX-Artificial-Intelligence/cross-api-bench}
 }
 ```

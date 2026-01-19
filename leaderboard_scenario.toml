@@ -6,21 +6,21 @@
 # ============================================
 
 [green_agent]
-agentbeats_id = "019bc0bd-07f9-7753-8850-98cfdb6cb24c"
+agentbeats_id = "019bc257-404f-7190-a49b-925b85048f0c"
 env = { MOCK_MODE = "true", LOG_LEVEL = "INFO", MCP_PORT = "8091" }
 
 [[participants]]
-agentbeats_id = "019bc0c0-f1b7-70d3-bada-5fea2bfdeeb2"
+agentbeats_id = "019bc258-4ab9-7b12-9edf-60c756ab44f7"
 name = "agent"
 env = { OPENAI_API_KEY = "${OPENAI_API_KEY}", MCP_PORT = "8091" }
 
 [config]
-task_ids = [0]
+task_ids = [0,1]
 max_turns = 10
 
 [metadata]
 name = "AgentX Enterprise Productivity Benchmark"
 version = "1.0.0"
-description = "Multi-tool agent evaluation across research, storage, communication, media, and productivity domains"
+description = "Multi-tool agent evaluation across research, storage, communication, media, and productivity domains."
 author = "ArtificaX Team"
 repository = "https://github.com/AX-AIAgents/AgentX"

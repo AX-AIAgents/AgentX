@@ -1,4 +1,4 @@
-# AgentX Architecture & Flow Diagrams
+# Cross-API Bench Architecture & Flow Diagrams
 
 ## 1. Multi-API vs Cross-API: The Key Difference
 
@@ -27,7 +27,7 @@ flowchart LR
 
 ---
 
-### AgentX Cross-API Approach (Orchestrated)
+### Cross-API Bench Cross-API Approach (Orchestrated)
 
 ```mermaid
 flowchart TD
@@ -64,41 +64,54 @@ flowchart TD
 ## 2. Evaluation Architecture
 
 ```mermaid
-flowchart TB
-    subgraph AgentBeats["AgentBeats Platform"]
-        Client[AgentBeats Client]
+flowchart LR
+    subgraph Client["☁️ AgentBeats"]
+        AB[Client]
     end
-    
-    subgraph GreenAgent["Green Agent (Evaluator)"]
-        A2A[A2A Server :9009]
-        MCP[MCP Server :8091]
-        Tasks[(103 Tasks)]
-        Scorer[3D Scorer]
+
+    subgraph Green["🟢 Green Agent"]
+        A2A[A2A :9009]
+        MCP[MCP :8091]
+        Score[3D Scorer]
     end
-    
-    subgraph PurpleAgent["Purple Agent (Participant)"]
-        Agent[AI Agent]
-        LLM[OpenAI GPT-4o-mini]
+
+    subgraph Tools["🛠️ 76 MCP Tools"]
+        T1[Notion 21]
+        T2[Drive 18]
+        T3[Gmail 12]
+        T4[YouTube 3]
+        T5[Search 2]
     end
-    
-    Client -->|"POST /rpc"| A2A
-    A2A -->|task_config| Agent
-    Agent -->|discover_tools| MCP
-    MCP -->|76 tools| Agent
-    Agent -->|tool_call| MCP
-    MCP -->|result| Agent
-    Agent -->|task_complete| A2A
-    A2A -->|tool_trace| Scorer
-    Scorer -->|3D_score| Client
-    
-    style Client fill:#ff9
-    style A2A fill:#9f9
-    style MCP fill:#9f9
-    style Agent fill:#f9f
-    style LLM fill:#f9f
+
+    subgraph Tasks["📋 103 Tasks"]
+        D1[🟢 Easy]
+        D2[🟡 Medium]
+        D3[🔴 Hard]
+    end
+
+    subgraph Agent["🟣 Purple Agent"]
+        AI[GPT-4o-mini]
+    end
+
+    AB --> A2A
+    A2A --> AI
+    AI <--> MCP
+    MCP --- Tools
+    A2A --- Tasks
+    AI --> Score
+    Score --> AB
 ```
 
+| Layer | Components |
+|-------|------------|
+| **Platform** | AgentBeats orchestration |
+| **Evaluator** | A2A server + MCP server + 3D Scorer |
+| **Tools** | 5 APIs: Notion, Drive, Gmail, YouTube, Search |
+| **Tasks** | 103 scenarios (Easy/Medium/Hard) |
+| **Participant** | Purple Agent (GPT-4o-mini) |
+
 ---
+
 
 ## 3. 3D Scoring Pipeline
 

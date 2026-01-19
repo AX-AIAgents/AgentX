@@ -1,4 +1,4 @@
-# 🔗 AgentX: Cross-API Orchestration Benchmark
+# 🔗 Cross-API Bench: Multi-Provider Orchestration Benchmark
 
 <div align="center">
 
@@ -7,7 +7,7 @@
 [![Tasks](https://img.shields.io/badge/Tasks-103-blue?style=for-the-badge)]()
 [![Tools](https://img.shields.io/badge/Tools-76-green?style=for-the-badge)]()
 [![APIs](https://img.shields.io/badge/APIs-5-orange?style=for-the-badge)]()
-[![AgentBeats](https://img.shields.io/badge/AgentBeats-13%2F13-success?style=for-the-badge)]()
+[![AgentBeats](https://img.shields.io/badge/AgentBeats-Compatible-success?style=for-the-badge)]()
 
 </div>
 
@@ -15,7 +15,7 @@
 
 ## 🎯 What is Cross-API Orchestration?
 
-Unlike single-API benchmarks, **AgentX** evaluates agents on tasks that require **chaining operations across multiple API providers**:
+Unlike single-API benchmarks, **Cross-API Bench** evaluates agents on tasks that require **chaining operations across multiple API providers**:
 
 ```
 📋 Task: "Compile Q4 metrics and notify stakeholders"
@@ -58,8 +58,8 @@ Total Score = (Action × 0.5) + (Argument × 0.4) + (Efficiency × 0.1)
 
 ```bash
 # Clone & install
-git clone https://github.com/AX-AIAgents/AgentX.git
-cd AgentX && uv sync
+git clone https://github.com/AX-AIAgents/cross-api-bench.git
+cd cross-api-bench && uv sync
 
 # Set API key
 export OPENAI_API_KEY=your_key
@@ -74,22 +74,13 @@ uv run agentbeats-run scenario.toml
 docker compose up
 ```
 
+**Pre-built Docker Images:**
+- Green Agent (Evaluator): `ghcr.io/ax-aiagents/green-agent:main`
+- Purple Agent (Participant): `ghcr.io/ax-aiagents/purple-agent:main`
+
 ---
 
-## 📁 Project Structure
 
-```
-AgentX/
-├── src/
-│   ├── server.py              # Green Agent (Evaluator)
-│   ├── mcp_http_server.py     # 76 MCP Tools Server
-│   ├── agents/agent.py        # Purple Agent (Participant)
-│   └── data/
-│       └── task_definitions.jsonl  # 103 Tasks
-├── ABSTRACT.md                # Academic documentation
-├── DIAGRAM.md                 # Architecture diagrams
-└── scenario.toml              # Benchmark configuration
-```
 
 ---
 
@@ -98,8 +89,8 @@ AgentX/
 | Provider | Tools | Example Operations |
 |----------|-------|-------------------|
 | **Notion** | 21 | Search, create pages, append blocks |
-| **Gmail** | 12 | Search, read, draft, send emails |
-| **Google Drive** | 18 | Search, create docs/sheets/slides |
+| **Gmail** | 19 | Search, read, draft, send emails |
+| **Google Drive** | 31 | Search, create docs/sheets/slides |
 | **YouTube** | 3 | Get transcripts, video info |
 | **Web Search** | 2 | Serper search, URL scraping |
 
