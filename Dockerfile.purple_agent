@@ -1,0 +1,102 @@
+# ========================================
+# Advanced Purple Agent - Dockerfile
+# ========================================
+# AgentBeats Compatible Purple Agent with Enhanced Features
+# 
+# Features:
+#   - Multi-model support (MODEL env var)
+#   - Retry logic with exponential backoff
+#   - Parallel tool execution
+#   - Prometheus metrics endpoint
+#   - Health & Readiness probes
+#
+# Build:
+#   docker build -f Dockerfile.purple_agent -t purple-agent:v2 .
+#
+# Run:
+#   docker run -p 9000:9000 \
+#     -e OPENAI_API_KEY=sk-xxx \
+#     -e MODEL=gpt-4o-mini \
+#     purple-agent:v2
+#
+# With custom model:
+#   docker run -p 9000:9000 \
+#     -e OPENAI_API_KEY=sk-xxx \
+#     -e MODEL=gpt-4o \
+#     -e TEMPERATURE=0.5 \
+#     purple-agent:v2
+# ========================================
+
+FROM --platform=linux/amd64 python:3.13-slim AS builder
+
+LABEL maintainer="AgentX Team"
+LABEL description="Advanced Purple Agent - Multi-model A2A Agent"
+LABEL version="2.0.0"
+
+# Build arguments
+ARG MODEL=gpt-4o-mini
+ARG TEMPERATURE=0.7
+ARG MAX_TOKENS=4096
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+RUN pip install --no-cache-dir uv
+
+# Copy dependency files
+COPY pyproject.toml uv.lock README.md ./
+
+# Install dependencies
+RUN uv sync --frozen --no-dev
+
+# ========================================
+# Production Stage
+# ========================================
+FROM --platform=linux/amd64 python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+# Default configuration (can be overridden at runtime)
+ENV MODEL=gpt-4o-mini
+ENV TEMPERATURE=0.7
+ENV MAX_TOKENS=4096
+ENV TASK_TIMEOUT=300
+ENV MAX_RETRIES=3
+ENV MAX_HISTORY=50
+
+WORKDIR /app
+
+# Install curl for health checks
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy uv and dependencies from builder
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /usr/local/bin/uv /usr/local/bin/uv
+
+# Copy Purple Agent code
+COPY src/purple_agent/ ./src/purple_agent/
+COPY src/__init__.py ./src/
+
+# Expose port
+EXPOSE 9000
+
+# Health check - uses the /health endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD curl -f http://localhost:${PORT:-9000}/health || exit 1
+
+# AgentBeats required: ENTRYPOINT with --host, --port, --card-url support
+ENTRYPOINT ["uv", "run", "src/purple_agent/server.py"]
+CMD ["--host", "0.0.0.0", "--port", "9000"]

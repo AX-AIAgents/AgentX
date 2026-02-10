@@ -11,6 +11,7 @@ env:
   REGISTRY: ghcr.io
   GREEN_IMAGE_NAME: ${{ github.repository_owner }}/green-agent
   PURPLE_IMAGE_NAME: ${{ github.repository_owner }}/purple-agent
+  PURPLE_ADVANCED_IMAGE_NAME: ${{ github.repository_owner }}/agentx-purple
 
 jobs:
   test:
@@ -104,7 +105,33 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Advanced Purple Agent (v2.0.0)
+      - name: Extract metadata (Advanced Purple Agent)
+        id: meta-purple-advanced
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.PURPLE_ADVANCED_IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push Advanced Purple Agent
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.purple_agent
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-purple-advanced.outputs.tags }}
+          labels: ${{ steps.meta-purple-advanced.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Image digest
         run: |
           echo "Green Agent: ${{ steps.meta-green.outputs.tags }}"
           echo "Purple Agent: ${{ steps.meta-purple.outputs.tags }}"
+          echo "Advanced Purple Agent: ${{ steps.meta-purple-advanced.outputs.tags }}"
