@@ -82,18 +82,18 @@ class RouterDecision(BaseModel):
         description="How to use tools: 'sequential' (one by one), 'parallel' (multiple at once), 'none'"
     )
     
-    estimated_steps: int = Field(
+    estimated_tool_calls: int = Field(
         default=1,
-        description="Estimated number of tool calls needed (1-10)"
+        description="Estimated number of tool calls needed"
     )
     
-    task_type: str = Field(
-        default="query",
-        description="Type of task: 'search', 'create', 'update', 'query', 'analyze'"
+    execution_plan: List[str] = Field(
+        default=[],
+        description="Step-by-step execution plan (e.g. ['Search for X', 'Read Y', 'Summarize Z'])"
     )
     
     reasoning: str = Field(
-        description="Brief explanation of the execution plan"
+        description="Brief explanation of the plan"
     )
 
 
@@ -112,8 +112,8 @@ class OrchestratorState(AgentState):
     # Router decisions
     needs_tools: bool = False
     tool_strategy: str = "sequential"
-    estimated_steps: int = 1
-    task_type: str = "query"
+    execution_plan: List[str] = []
+    current_step: int = 0
     routing_reasoning: str = ""
     
     # Execution tracking
@@ -204,46 +204,32 @@ class MCPToolLoader:
 # Router Agent
 # =============================================================================
 
-ROUTER_SYSTEM_PROMPT = """You are an elite task analyzer for an AI agent.
+ROUTER_SYSTEM_PROMPT = """You are an elite task planner.
 
-Your job: Analyze the user's request and create an optimal execution plan.
+Your job: Analyze the user's request and create a detailed execution plan.
 
-## Analysis Criteria
+## Planning Criteria
 
-1. **Does it need tools?**
-   - Simple questions → NO tools needed
-   - Requires external data/actions → YES tools needed
+1. **Needs Tools?**
+   - Does this require external information or actions?
+   
+2. **Execution Plan (Critical):**
+   - Create a step-by-step list of actions.
+   - Be specific: "Search for X", "Read file Y", "Send email to Z".
+   - If the task is complex, break it down.
 
-2. **Tool strategy?**
-   - 'sequential': Tools must be chained (search → read → summarize)
-   - 'parallel': Independent tools can run together
-   - 'none': No tools, just LLM response
+3. **Examples:**
 
-3. **Estimated steps?**
-   - How many tool calls do you expect? (Be conservative: 1-10)
+User: "Find the latest report and email it to generic@example.com"
+Plan: ["Search for latest report", "Read report content", "Draft email with report summary", "Send email"]
 
-4. **Task type?**
-   - search: Finding information
-   - create: Creating new content/data
-   - update: Modifying existing data
-   - query: Getting current state
-   - analyze: Processing/analyzing data
+User: "What is 2+2?"
+Plan: [] (No tools needed)
 
-## Examples
+User: "Summarize the 'Project X' document"
+Plan: ["Search for Project X document", "Read document content", "Summarize content"]
 
-"What is the capital of France?"
-→ needs_tools=False, tool_strategy='none', estimated_steps=0
-
-"Search for recent news about AI"
-→ needs_tools=True, tool_strategy='sequential', estimated_steps=2, task_type='search'
-
-"Get my account balance and transaction history"
-→ needs_tools=True, tool_strategy='parallel', estimated_steps=2, task_type='query'
-
-"Search for product info, then create a summary document"
-→ needs_tools=True, tool_strategy='sequential', estimated_steps=3, task_type='create'
-
-Be precise. Be conservative with step estimates.
+Be precise. Your plan determines success.
 """
 
 
@@ -264,28 +250,18 @@ def create_router_agent(model: ChatOpenAI, middleware: List):
 
 EXECUTOR_SYSTEM_PROMPT = """You are an elite task execution agent.
 
-You have access to various tools. Your job is to complete the user's task efficiently and accurately.
+You have a PLAN to follow. Execute it step-by-step using available tools.
 
-## Execution Guidelines
+## Execution Rules
 
-1. **Understand the task** - Read carefully, identify the goal
-2. **Choose tools wisely** - Only use what's necessary
-3. **Validate results** - Check tool outputs make sense
-4. **Chain logically** - When one tool's output feeds another
-5. **Handle errors** - If a tool fails, try alternatives or explain
+1. **Follow the Plan:** Look at the 'execution_plan' in context.
+2. **One Step at a Time:** Perform the current step, then verify.
+3. **Chain Outputs:** Use the output of previous tools for the next step.
+   - Example: Search finds ID → Read uses that ID.
+4. **Be Persistent:** If a tool fails, try a different approach or search for the correct query.
 
-## Tool Usage Best Practices
-
-- Read tool descriptions carefully
-- Match argument names exactly
-- Check tool results before proceeding
-- Don't call the same tool multiple times unnecessarily
-- If stuck, explain what went wrong
-
-## Success Criteria
-
-Complete the task fully, efficiently, and accurately.
-You are being evaluated on: correctness, efficiency, and tool usage quality.
+## Goal
+Complete ALL steps in the plan. Do not stop early.
 """
 
 
@@ -337,29 +313,31 @@ def router_node(state: OrchestratorState, model: ChatOpenAI, middleware: List) -
         return {
             "needs_tools": decision.needs_tools,
             "tool_strategy": decision.tool_strategy,
-            "estimated_steps": decision.estimated_steps,
-            "task_type": decision.task_type,
+            "execution_plan": decision.execution_plan,
             "routing_reasoning": decision.reasoning,
             "messages": result.get("messages", []),
         }
     
-    # Fallback: assume needs tools
+    # Fallback
     return {
         "needs_tools": True,
-        "tool_strategy": "sequential",
-        "estimated_steps": 1,
-        "task_type": "query",
-        "routing_reasoning": "Default routing",
+        "execution_plan": ["Execute task"],
         "messages": result.get("messages", []),
     }
 
 
 def executor_node(state: OrchestratorState, model: ChatOpenAI, tools: List[Tool], middleware: List) -> Dict:
     """Execute task using tools."""
+    """Execute task using tools, following the plan."""
     user_input = state.get("user_input", "")
+    plan = state.get("execution_plan", [])
+    
+    # Inject plan into context
+    plan_str = "\n".join([f"{i+1}. {step}" for i, step in enumerate(plan)])
+    context = f"Task: {user_input}\n\nExecution Plan:\n{plan_str}\n\nExecute the plan."
     
     executor = create_executor_agent(model, tools, middleware)
-    result = executor.invoke({"messages": [HumanMessage(content=user_input)]})
+    result = executor.invoke({"messages": [HumanMessage(content=context)]})
     
     messages = result.get("messages", [])
     
