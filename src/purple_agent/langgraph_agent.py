@@ -327,19 +327,40 @@ def router_node(state: OrchestratorState, model: ChatOpenAI, middleware: List) -
 
 
 def executor_node(state: OrchestratorState, model: ChatOpenAI, tools: List[Tool], middleware: List) -> Dict:
-    """Execute task using tools."""
-    """Execute task using tools, following the plan."""
-    user_input = state.get("user_input", "")
-    plan = state.get("execution_plan", [])
+    """Execute current step of the plan."""
+    print(f"🔄 Executing step {state['current_step'] + 1}/{len(state['execution_plan'])}: {state['execution_plan'][state['current_step']]}")
     
-    # Inject plan into context
-    plan_str = "\n".join([f"{i+1}. {step}" for i, step in enumerate(plan)])
-    context = f"Task: {user_input}\n\nExecution Plan:\n{plan_str}\n\nExecute the plan."
+    plan_step = state['execution_plan'][state['current_step']]
     
+    # Context includes full history and current step instruction
+    context = f"Current Step: {plan_step}\n\nExecute this step using available tools. If you need information from previous steps, check the conversation history."
+    
+    # Create fresh executor for this step to avoid context bloat
     executor = create_executor_agent(model, tools, middleware)
-    result = executor.invoke({"messages": [HumanMessage(content=context)]})
+    result = executor.invoke({
+        "messages": state.get("messages", []) + [HumanMessage(content=context)]
+    })
     
-    messages = result.get("messages", [])
+    step_messages = result.get("messages", [])
+    
+    # Extract tool calls from this step
+    new_tool_results = []
+    for msg in step_messages:
+        if hasattr(msg, 'tool_calls') and msg.tool_calls:
+            for tc in msg.tool_calls:
+                new_tool_results.append({
+                    "name": tc.get("name", "unknown"),
+                    "arguments": tc.get("args", {}),
+                })
+    
+    # Update state
+    return {
+        "tool_results": state.get("tool_results", []) + new_tool_results,
+        "tool_call_count": state.get("tool_call_count", 0) + len(new_tool_results),
+        "messages": step_messages,  # Append to history
+        "current_step": state["current_step"] + 1,
+        "output": step_messages[-1].content if step_messages else ""
+    }
     
     # Extract tool calls and final answer
     tool_results = []
@@ -389,9 +410,16 @@ def direct_node(state: OrchestratorState, model: ChatOpenAI, middleware: List) -
 
 def after_router(state: OrchestratorState) -> Literal["executor", "direct"]:
     """Route after analyzing task."""
-    if state.get("needs_tools", False):
+    if state.get("needs_tools", False) and state.get("execution_plan"):
         return "executor"
     return "direct"
+
+
+def after_executor(state: OrchestratorState) -> Literal["executor", "synthesize"]:
+    """Loop back to executor if plan is not finished."""
+    if state["current_step"] < len(state["execution_plan"]):
+        return "executor"
+    return "synthesize"
 
 
 # =============================================================================
@@ -406,6 +434,7 @@ def build_agent_graph(model: ChatOpenAI, tools: List[Tool], middleware: List):
     graph.add_node("router", lambda s: router_node(s, model, middleware))
     graph.add_node("executor", lambda s: executor_node(s, model, tools, middleware))
     graph.add_node("direct", lambda s: direct_node(s, model, middleware))
+    graph.add_node("synthesize", lambda s: {"final_answer": s.get("output", "Task completed")})
     
     # Entry point
     graph.set_entry_point("router")
@@ -420,9 +449,19 @@ def build_agent_graph(model: ChatOpenAI, tools: List[Tool], middleware: List):
         }
     )
     
+    # Executor loop
+    graph.add_conditional_edges(
+        "executor",
+        after_executor,
+        {
+            "executor": "executor",
+            "synthesize": "synthesize",
+        }
+    )
+    
     # End states
-    graph.add_edge("executor", END)
     graph.add_edge("direct", END)
+    graph.add_edge("synthesize", END)
     
     return graph.compile(checkpointer=MemorySaver())
 
