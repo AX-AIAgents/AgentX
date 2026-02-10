@@ -541,34 +541,80 @@ class LangGraphAgent:
         )
         
         try:
-            # Invoke graph
-            config = {"configurable": {"thread_id": "main"}}
-            result = await asyncio.to_thread(
-                self.graph.invoke,
-                {"user_input": task_text, "messages": [HumanMessage(content=task_text)]},
-                config
+            # 1. Router Analysis
+            router = create_router_agent(ChatOpenAI(model=self.model_name, temperature=self.temperature), self.middleware)
+            router_result = await asyncio.to_thread(router.invoke, {"messages": [HumanMessage(content=task_text)]})
+            decision: RouterDecision = router_result.get("structured_response")
+            
+            needs_tools = decision.needs_tools if decision else True
+            plan = decision.execution_plan if decision else ["Execute task"]
+            
+            await updater.update_status(
+                TaskState.working,
+                new_agent_text_message(f"Plan: {len(plan)} steps -> {plan}")
             )
             
-            # Extract results
-            final_answer = result.get("final_answer", result.get("output", "Task completed"))
-            tool_results = result.get("tool_results", [])
-            tool_call_count = result.get("tool_call_count", 0)
+            # 2. Execution Loop
+            messages = [HumanMessage(content=task_text)]
+            tool_results = []
+            final_answer = ""
             
-            # Build response
+            if needs_tools:
+                for i, step in enumerate(plan):
+                    current_step_num = i + 1
+                    total_steps = len(plan)
+                    
+                    await updater.update_status(
+                        TaskState.working,
+                        new_agent_text_message(f"Executing step {current_step_num}/{total_steps}: {step}")
+                    )
+                    
+                    # Prepare context for this step
+                    context = f"Current Step: {step}\n\nExecute this step using available tools. If you need information from previous steps, check the conversation history."
+                    step_input = messages + [HumanMessage(content=context)]
+                    
+                    # Execute
+                    executor = create_executor_agent(ChatOpenAI(model=self.model_name, temperature=self.temperature), self.tools, self.middleware)
+                    step_result = await asyncio.to_thread(executor.invoke, {"messages": step_input})
+                    
+                    # Process results
+                    step_msgs = step_result.get("messages", [])
+                    messages.extend(step_msgs)  # Add to history
+                    
+                    # Extract tool calls
+                    for msg in step_msgs:
+                        if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                            for tc in msg.tool_calls:
+                                tool_results.append({
+                                    "name": tc.get("name", "unknown"),
+                                    "arguments": tc.get("args", {}),
+                                })
+                                
+                    final_answer = step_msgs[-1].content if step_msgs else ""
+                    
+            else:
+                # Direct response
+                direct = create_direct_agent(ChatOpenAI(model=self.model_name, temperature=self.temperature), self.middleware)
+                result = await asyncio.to_thread(direct.invoke, {"messages": messages})
+                final_answer = result.get("messages", [])[-1].content
+            
+            # 3. Final Response
             response_data = {
                 "response": final_answer,
                 "tool_calls": tool_results,
-                "tool_call_count": tool_call_count,
+                "tool_call_count": len(tool_results),
                 "routing": {
-                    "needs_tools": result.get("needs_tools", False),
-                    "strategy": result.get("tool_strategy", "none"),
-                    "reasoning": result.get("routing_reasoning", ""),
+                    "needs_tools": needs_tools,
+                    "execution_plan": plan,
+                    "reasoning": decision.reasoning if decision else "Fallback",
                 },
                 "metrics": {
                     "total_tasks": self.total_tasks,
                     "success_rate": f"{(self.successful_tasks / max(self.total_tasks, 1)) * 100:.1f}%",
                 }
             }
+            
+            print(f"DEBUG RESPONSE: {json.dumps(response_data, default=str)}")
             
             await updater.add_artifact(
                 parts=[Part(root=TextPart(text=json.dumps(response_data)))],
