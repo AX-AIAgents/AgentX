@@ -9,13 +9,18 @@
 agentbeats_id = "019bc257-404f-7190-a49b-925b85048f0c"
 env = { MOCK_MODE = "true", LOG_LEVEL = "INFO", MCP_PORT = "8091" }
 
+# [[participants]]
+# agentbeats_id = "019bc258-4ab9-7b12-9edf-60c756ab44f7"
+# name = "agent"
+# env = { OPENAI_API_KEY = "${OPENAI_API_KEY}", MCP_PORT = "8091" }
+
 [[participants]]
-agentbeats_id = "019bc258-4ab9-7b12-9edf-60c756ab44f7"
+agentbeats_id = "019c4694-3ea5-7a22-b9b5-6fb9051605de"
 name = "agent"
-env = { OPENAI_API_KEY = "${OPENAI_API_KEY}", MCP_PORT = "8091" }
+env = { OPENAI_API_KEY = "${OPENAI_API_KEY}", MCP_PORT = "8091", MODEL = "gpt-4o-mini" }
 
 [config]
-task_ids = [0,1]
+task_ids = [0]
 max_turns = 10
 
 [metadata]

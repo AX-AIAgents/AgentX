@@ -7,8 +7,10 @@ Features:
 - Metrics tracking
 - Configurable timeouts
 - Graceful shutdown handling
+- Optional LangGraph agent (USE_LANGGRAPH env var)
 """
 import asyncio
+import os
 import signal
 import time
 from contextlib import asynccontextmanager
@@ -27,6 +29,14 @@ from a2a.utils.errors import ServerError
 from a2a.utils import new_agent_text_message, new_task
 
 from src.purple_agent.agent import AdvancedPurpleAgent, ModelConfig, RetryConfig, MemoryConfig
+# from langgraph_agent import LangGraphAgent
+# Optional LangGraph support
+try:
+    from langgraph_agent import LangGraphAgent
+    LANGGRAPH_AVAILABLE = True
+except ImportError:
+    LANGGRAPH_AVAILABLE = False
+    LangGraphAgent = None
 
 
 # =============================================================================
@@ -107,19 +117,39 @@ class AdvancedPurpleExecutor(AgentExecutor):
         self.memory_config = memory_config
         self.task_timeout = task_timeout
         
-        self.agents: dict[str, AdvancedPurpleAgent] = {}
+        # Use LangGraph if available
+        self.use_langgraph = LANGGRAPH_AVAILABLE
+        
+        if self.use_langgraph:
+            print("✅ Using LangGraph Agent (Router Pattern)")
+        else:
+            print("⚠️ LangGraph not available, using basic agent")
+        
+        self.agents: dict[str, Any] = {}  # Can hold either type
         self.metrics = ExecutorMetrics()
         self._shutdown_event = asyncio.Event()
         self._active_tasks: set[asyncio.Task] = set()
     
-    def _create_agent(self) -> AdvancedPurpleAgent:
+    def _create_agent(self):
         """Create a new agent instance with current configuration."""
-        return AdvancedPurpleAgent(
-            mcp_endpoint=self.mcp_endpoint,
-            model_config=self.model_config,
-            retry_config=self.retry_config,
-            memory_config=self.memory_config,
-        )
+        if self.use_langgraph and LANGGRAPH_AVAILABLE:
+            # Create LangGraph agent
+            model_name = self.model_config.model_name if self.model_config else "gpt-4o-mini"
+            temperature = self.model_config.temperature if self.model_config else 0.0
+            
+            return LangGraphAgent(
+                mcp_endpoint=self.mcp_endpoint,
+                model=model_name,
+                temperature=temperature,
+            )
+        else:
+            # Fallback to basic agent
+            return AdvancedPurpleAgent(
+                mcp_endpoint=self.mcp_endpoint,
+                model_config=self.model_config,
+                retry_config=self.retry_config,
+                memory_config=self.memory_config,
+            )
     
     @asynccontextmanager
     async def _track_request(self):
