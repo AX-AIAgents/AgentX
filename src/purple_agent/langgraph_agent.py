@@ -328,9 +328,15 @@ def router_node(state: OrchestratorState, model: ChatOpenAI, middleware: List) -
 
 def executor_node(state: OrchestratorState, model: ChatOpenAI, tools: List[Tool], middleware: List) -> Dict:
     """Execute current step of the plan."""
-    print(f"🔄 Executing step {state['current_step'] + 1}/{len(state['execution_plan'])}: {state['execution_plan'][state['current_step']]}")
+    print(f"🔄 Executing step {state.get('current_step', 0) + 1}/{len(state.get('execution_plan', []))}: {state.get('execution_plan', [])[state.get('current_step', 0)]}")
     
-    plan_step = state['execution_plan'][state['current_step']]
+    current_step = state.get("current_step", 0)
+    plan = state.get("execution_plan", [])
+    
+    if not plan or current_step >= len(plan):
+        return {"output": "Plan execution complete"}
+        
+    plan_step = plan[current_step]
     
     # Context includes full history and current step instruction
     context = f"Current Step: {plan_step}\n\nExecute this step using available tools. If you need information from previous steps, check the conversation history."
@@ -358,7 +364,7 @@ def executor_node(state: OrchestratorState, model: ChatOpenAI, tools: List[Tool]
         "tool_results": state.get("tool_results", []) + new_tool_results,
         "tool_call_count": state.get("tool_call_count", 0) + len(new_tool_results),
         "messages": step_messages,  # Append to history
-        "current_step": state["current_step"] + 1,
+        "current_step": current_step + 1,
         "output": step_messages[-1].content if step_messages else ""
     }
     
@@ -417,7 +423,10 @@ def after_router(state: OrchestratorState) -> Literal["executor", "direct"]:
 
 def after_executor(state: OrchestratorState) -> Literal["executor", "synthesize"]:
     """Loop back to executor if plan is not finished."""
-    if state["current_step"] < len(state["execution_plan"]):
+    current = state.get("current_step", 0)
+    total = len(state.get("execution_plan", []))
+    
+    if current < total:
         return "executor"
     return "synthesize"
 
