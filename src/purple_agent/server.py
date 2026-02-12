@@ -52,11 +52,11 @@ def load_config():
     """Load configuration from environment."""
     return {
         "model": os.getenv("MODEL", "gpt-4o-mini"),
-        "temperature": float(os.getenv("TEMPERATURE", "0.7")),
+        "temperature": float(os.getenv("TEMPERATURE", "0.0")),  # Lower temp for accuracy
         "max_tokens": int(os.getenv("MAX_TOKENS", "4096")),
-        "task_timeout": float(os.getenv("TASK_TIMEOUT", "300")),
-        "max_retries": int(os.getenv("MAX_RETRIES", "3")),
-        "max_history": int(os.getenv("MAX_HISTORY", "50")),
+        "task_timeout": float(os.getenv("TASK_TIMEOUT", "60")),  # 1 min for AgentBeats
+        "max_retries": int(os.getenv("MAX_RETRIES", "2")),  # Fewer retries
+        "max_history": int(os.getenv("MAX_HISTORY", "20")),  # Shorter history
     }
 
 
