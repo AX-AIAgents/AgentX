@@ -71,16 +71,24 @@ class MCPToolLoader:
                 if not tool_name:
                     continue
                 
-                # Create async function for this tool
-                async def tool_func(tool_name=tool_name, **kwargs):
-                    return await self.call_tool(tool_name, kwargs)
+                # Create closure properly to capture tool_name
+                def make_tool_func(name: str):
+                    async def tool_func(**kwargs):
+                        return await self.call_tool(name, kwargs)
+                    
+                    def sync_wrapper(**kwargs):
+                        return asyncio.run(tool_func(**kwargs))
+                    
+                    return sync_wrapper, tool_func
+                
+                sync_func, async_func = make_tool_func(tool_name)
                 
                 # Wrap in Tool
                 langchain_tools.append(Tool(
                     name=tool_name,
                     description=mcp_tool.get("description", ""),
-                    func=lambda **kw: asyncio.run(tool_func(**kw)),
-                    coroutine=tool_func,  # For async support
+                    func=sync_func,
+                    coroutine=async_func,  # For async support
                 ))
             
             self._tools_cache = langchain_tools
