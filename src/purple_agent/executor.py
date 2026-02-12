@@ -29,14 +29,14 @@ from a2a.utils.errors import ServerError
 from a2a.utils import new_agent_text_message, new_task
 
 from src.purple_agent.agent import AdvancedPurpleAgent, ModelConfig, RetryConfig, MemoryConfig
-
+# from langgraph_agent import LangGraphAgent
 # Optional LangGraph support
 try:
-    from src.purple_agent.langgraph_agent import LangGraphAgentV2
-    LANGGRAPH_AVAILABLE = True
+    from langgraph_agent import LangGraphAgent
+    LANGGRAPH_AVAILABLE = False
 except ImportError:
     LANGGRAPH_AVAILABLE = False
-    LangGraphAgentV2 = None
+    LangGraphAgent = None
 
 
 # =============================================================================
@@ -109,7 +109,7 @@ class AdvancedPurpleExecutor(AgentExecutor):
         model_config: ModelConfig | None = None,
         retry_config: RetryConfig | None = None,
         memory_config: MemoryConfig | None = None,
-        task_timeout: float = 60.0,  # 1 minute default (AgentBeats compatible)
+        task_timeout: float = 300.0,  # 5 minutes default
     ):
         self.mcp_endpoint = mcp_endpoint
         self.model_config = model_config
@@ -121,7 +121,7 @@ class AdvancedPurpleExecutor(AgentExecutor):
         self.use_langgraph = LANGGRAPH_AVAILABLE
         
         if self.use_langgraph:
-            print("✅ Using LangGraph Agent V2 (Optimized)")
+            print("✅ Using LangGraph Agent (Router Pattern)")
         else:
             print("⚠️ LangGraph not available, using basic agent")
         
@@ -133,11 +133,11 @@ class AdvancedPurpleExecutor(AgentExecutor):
     def _create_agent(self):
         """Create a new agent instance with current configuration."""
         if self.use_langgraph and LANGGRAPH_AVAILABLE:
-            # Create LangGraph V2 agent
+            # Create LangGraph agent
             model_name = self.model_config.model_name if self.model_config else "gpt-4o-mini"
             temperature = self.model_config.temperature if self.model_config else 0.0
             
-            return LangGraphAgentV2(
+            return LangGraphAgent(
                 mcp_endpoint=self.mcp_endpoint,
                 model=model_name,
                 temperature=temperature,

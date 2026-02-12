@@ -1,26 +1,27 @@
 """
-AgentX LangGraph Agent V2 - Simplified & Fast
-==============================================
-Production-ready agent optimized for AgentBeats benchmarks.
+AgentX LangGraph Agent - Simplified Single Node Architecture
+============================================================
+Clean, minimal agent with single execution node.
 
-Key Changes from V1:
-- No router overhead - direct execution
-- Streaming-friendly architecture
-- Proper async/await throughout
-- Green Agent compatible response format
+Architecture:
+- One unified agent node with tools
+- Simple state management
+- Direct execution, no routing overhead
 """
-import asyncio
+
 import json
-import os
-from typing import Dict, List, Any, Optional
+import asyncio
+from typing import List, Dict, Any, Optional
+from pathlib import Path
 
 import httpx
 from pydantic import BaseModel, Field
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage
+from langgraph.graph.message import add_messages
+from langgraph.graph import StateGraph, END, MessagesState
+from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.tools import Tool
 from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, END, MessagesState
-from langgraph.prebuilt import ToolNode
 
 from a2a.server.tasks import TaskUpdater
 from a2a.types import Message, TaskState, Part, TextPart
@@ -28,11 +29,21 @@ from a2a.utils import get_message_text, new_agent_text_message
 
 
 # =============================================================================
-# MCP Tool Loading (Simplified)
+# Simple State
+# =============================================================================
+
+class AgentState(MessagesState):
+    """Minimal state tracking."""
+    tool_results: List[Dict[str, Any]] = []
+    final_answer: str = ""
+
+
+# =============================================================================
+# MCP Tool Loading
 # =============================================================================
 
 class MCPToolLoader:
-    """Load and convert MCP tools to LangChain format."""
+    """Load MCP tools and convert to LangChain format."""
     
     def __init__(self, mcp_endpoint: str):
         self.mcp_endpoint = mcp_endpoint
@@ -41,7 +52,7 @@ class MCPToolLoader:
     
     async def get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=30.0)
+            self._client = httpx.AsyncClient(timeout=60.0)
         return self._client
     
     async def close(self):
@@ -49,7 +60,7 @@ class MCPToolLoader:
             await self._client.aclose()
     
     async def load_tools(self) -> List[Tool]:
-        """Fetch tools from MCP and convert to LangChain Tools."""
+        """Fetch and convert MCP tools."""
         if self._tools_cache:
             return self._tools_cache
         
@@ -58,158 +69,128 @@ class MCPToolLoader:
             response = await client.get(f"{self.mcp_endpoint}/tools")
             
             if response.status_code != 200:
-                print(f"⚠️ MCP tools endpoint returned {response.status_code}")
+                print(f"⚠️ Failed to load tools: HTTP {response.status_code}")
                 return []
             
             data = response.json()
             mcp_tools = data.get("tools", [])
             
+            print(f"✅ Loaded {len(mcp_tools)} MCP tools")
+            
             # Convert to LangChain Tools
             langchain_tools = []
             for mcp_tool in mcp_tools:
-                tool_name = mcp_tool.get("name", "")
-                if not tool_name:
-                    continue
+                name = mcp_tool.get("name", "")
+                description = mcp_tool.get("description", f"Execute {name}")
                 
-                # Create closure properly to capture tool_name
-                def make_tool_func(name: str):
-                    async def tool_func(**kwargs):
-                        return await self.call_tool(name, kwargs)
+                # Create closure with proper binding
+                def make_tool_func(tool_name: str):
+                    async def execute_tool(**kwargs) -> str:
+                        try:
+                            client = await self.get_client()
+                            response = await client.post(
+                                f"{self.mcp_endpoint}/tools/call",
+                                json={"name": tool_name, "arguments": kwargs}
+                            )
+                            result = response.json()
+                            return json.dumps(result, default=str)
+                        except Exception as e:
+                            return json.dumps({"error": str(e)})
                     
-                    def sync_wrapper(**kwargs):
-                        return asyncio.run(tool_func(**kwargs))
+                    def sync_wrapper(**kwargs) -> str:
+                        return asyncio.run(execute_tool(**kwargs))
                     
-                    return sync_wrapper, tool_func
+                    return sync_wrapper, execute_tool
                 
-                sync_func, async_func = make_tool_func(tool_name)
+                sync_func, async_func = make_tool_func(name)
                 
-                # Wrap in Tool
-                langchain_tools.append(Tool(
-                    name=tool_name,
-                    description=mcp_tool.get("description", ""),
+                tool = Tool(
+                    name=name,
+                    description=description,
                     func=sync_func,
-                    coroutine=async_func,  # For async support
-                ))
+                    coroutine=async_func,
+                )
+                langchain_tools.append(tool)
             
             self._tools_cache = langchain_tools
             return langchain_tools
             
         except Exception as e:
-            print(f"❌ Failed to load MCP tools: {e}")
+            print(f"❌ Error loading tools: {e}")
             return []
-    
-    async def call_tool(self, tool_name: str, arguments: dict) -> str:
-        """Execute a tool via MCP endpoint."""
-        try:
-            client = await self.get_client()
-            response = await client.post(
-                f"{self.mcp_endpoint}/tools/call",
-                json={"name": tool_name, "arguments": arguments},
-                timeout=60.0
-            )
-            
-            result = response.json()
-            # Return as string for LLM consumption
-            return json.dumps(result)
-            
-        except Exception as e:
-            return json.dumps({"error": str(e)})
 
 
 # =============================================================================
-# Agent State
+# Single Agent Node
 # =============================================================================
 
-class AgentState(MessagesState):
-    """Simple state extending MessagesState."""
-    tool_calls_made: List[Dict[str, Any]] = []
+SYSTEM_PROMPT = """You are a helpful AI assistant with access to tools.
+
+When given a task:
+1. Think about what needs to be done
+2. Use available tools when needed
+3. Provide clear, accurate responses
+
+Be direct and efficient."""
+
+
+def agent_node(state: AgentState, model: ChatOpenAI, tools: List[Tool]) -> Dict:
+    """Single unified agent execution node."""
+    messages = state.get("messages", [])
+    
+    # Bind tools to model
+    model_with_tools = model.bind_tools(tools)
+    
+    # Invoke model
+    response = model_with_tools.invoke(messages)
+    
+    # Extract tool calls if any
+    tool_results = []
+    if hasattr(response, 'tool_calls') and response.tool_calls:
+        for tc in response.tool_calls:
+            tool_results.append({
+                "name": tc.get("name", "unknown"),
+                "arguments": tc.get("args", {}),
+            })
+    
+    return {
+        "messages": [response],
+        "tool_results": state.get("tool_results", []) + tool_results,
+        "final_answer": response.content if hasattr(response, 'content') else str(response),
+    }
 
 
 # =============================================================================
-# Graph Builder (Simplified)
+# Graph Builder
 # =============================================================================
 
-def should_continue(state: AgentState) -> str:
-    """Determine if we should continue to tools or end."""
-    messages = state["messages"]
-    last_message = messages[-1]
+def build_agent_graph(model: ChatOpenAI, tools: List[Tool]):
+    """Build simple single-node graph."""
+    graph = StateGraph(AgentState)
     
-    # If LLM makes a tool call, go to tools node
-    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-        return "tools"
+    # Single agent node
+    graph.add_node("agent", lambda s: agent_node(s, model, tools))
     
-    # Otherwise end
-    return END
-
-
-def call_model(state: AgentState, model: ChatOpenAI):
-    """Call the LLM."""
-    messages = state["messages"]
-    response = model.invoke(messages)
-    return {"messages": [response]}
-
-
-def build_graph(model: ChatOpenAI, tools: List[Tool]):
-    """Build simplified agent graph with tools."""
+    # Entry and exit
+    graph.set_entry_point("agent")
+    graph.add_edge("agent", END)
     
-    # Create graph
-    workflow = StateGraph(AgentState)
-    
-    # Define nodes
-    workflow.add_node("agent", lambda s: call_model(s, model))
-    
-    # Add tool node if tools exist
-    if tools:
-        tool_node = ToolNode(tools)
-        workflow.add_node("tools", tool_node)
-    
-    # Set entry point
-    workflow.set_entry_point("agent")
-    
-    # Add conditional edges
-    if tools:
-        workflow.add_conditional_edges(
-            "agent",
-            should_continue,
-            {
-                "tools": "tools",
-                END: END
-            }
-        )
-        # After tools, go back to agent
-        workflow.add_edge("tools", "agent")
-    else:
-        workflow.add_edge("agent", END)
-    
-    # Compile without checkpointer (stateless execution)
-    return workflow.compile()
+    return graph.compile(checkpointer=MemorySaver())
 
 
 # =============================================================================
 # Main Agent Class
 # =============================================================================
 
-SYSTEM_PROMPT = """You are an elite AI assistant that helps complete tasks using available tools.
-
-When given a task:
-1. Analyze what needs to be done
-2. Use the available tools to complete the task efficiently
-3. Chain tool outputs together when needed
-4. Provide a clear summary of what you did
-
-Be direct and efficient. Use tools when needed, but don't over-complicate simple tasks.
-"""
-
-
-class LangGraphAgentV2:
+class LangGraphAgent:
     """
-    Simplified LangGraph Agent for AgentBeats.
+    Simplified LangGraph agent with single execution node.
     
     Features:
-    - Fast initialization
-    - Proper async/await
-    - Green Agent compatible output
-    - Streaming support
+    - Clean single-node architecture
+    - Direct tool execution
+    - Minimal state management
+    - Works with ANY MCP server
     """
     
     def __init__(
@@ -225,7 +206,6 @@ class LangGraphAgentV2:
         self.tool_loader = MCPToolLoader(mcp_endpoint)
         self.graph = None
         self.tools = []
-        self.model = None
         
         # Metrics
         self.total_tasks = 0
@@ -233,10 +213,7 @@ class LangGraphAgentV2:
     
     async def initialize(self):
         """Load tools and build graph."""
-        if self.graph is not None:
-            return  # Already initialized
-        
-        print(f"🔧 Initializing LangGraph Agent V2...")
+        print(f"🔧 Initializing LangGraph Agent...")
         print(f"   Model: {self.model_name}")
         print(f"   MCP: {self.mcp_endpoint}")
         
@@ -244,92 +221,52 @@ class LangGraphAgentV2:
         self.tools = await self.tool_loader.load_tools()
         print(f"✅ Loaded {len(self.tools)} tools")
         
-        # Create model with tool binding
-        self.model = ChatOpenAI(
+        # Create model
+        model = ChatOpenAI(
             model=self.model_name,
             temperature=self.temperature,
-            streaming=True
-        )
-        
-        if self.tools:
-            self.model = self.model.bind_tools(self.tools)
+        ).with_config({"configurable": {"system_message": SYSTEM_PROMPT}})
         
         # Build graph
-        self.graph = build_graph(self.model, self.tools)
-        print(f"✅ Agent graph compiled")
+        self.graph = build_agent_graph(model, self.tools)
+        print(f"✅ Agent ready")
     
     async def run(self, message: Message, updater: TaskUpdater) -> None:
         """Execute agent (A2A interface)."""
-        # Initialize on first run
         if self.graph is None:
             await self.initialize()
         
         self.total_tasks += 1
         task_text = get_message_text(message)
         
-        print(f"\n{'='*60}")
-        print(f"📋 Task #{self.total_tasks}: {task_text[:100]}...")
-        print(f"{'='*60}")
-        
         await updater.update_status(
             TaskState.working,
-            new_agent_text_message("Processing request...")
+            new_agent_text_message("Processing...")
         )
         
         try:
-            # Prepare input with system prompt
-            input_messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": task_text}
-            ]
-            
-            # Invoke graph (stateless execution)
-            print(f"🚀 Starting execution...")
-            start_time = asyncio.get_event_loop().time()
-            
-            # Run in thread pool to avoid blocking
+            # Execute graph
             result = await asyncio.to_thread(
                 self.graph.invoke,
-                {"messages": input_messages},
-                {"recursion_limit": 20}  # Max 20 steps
+                {"messages": [HumanMessage(content=task_text)]},
+                {"configurable": {"thread_id": str(self.total_tasks)}}
             )
             
-            elapsed = asyncio.get_event_loop().time() - start_time
-            
             # Extract results
-            messages = result.get("messages", [])
-            print(f"📨 Received {len(messages)} messages")
+            final_answer = result.get("final_answer", "Task completed")
+            tool_results = result.get("tool_results", [])
             
-            final_message = messages[-1] if messages else None
-            
-            # Extract tool calls
-            tool_calls_made = []
-            for msg in messages:
-                if hasattr(msg, "tool_calls") and msg.tool_calls:
-                    for tc in msg.tool_calls:
-                        tool_name = tc.get("name", "unknown")
-                        tool_calls_made.append({
-                            "name": tool_name,
-                            "arguments": tc.get("args", {})
-                        })
-                        print(f"  🔧 Tool: {tool_name}")
-            
-            # Get final answer
-            if final_message and hasattr(final_message, "content"):
-                final_answer = final_message.content
-            else:
-                final_answer = "Task completed"
-            
-            print(f"✅ Task complete in {elapsed:.2f}s ({len(tool_calls_made)} tools)")
-            print(f"📝 Response: {final_answer[:200]}...")
-            
-            # Build response in Green Agent format
+            # Build response
             response_data = {
                 "response": final_answer,
-                "tool_calls": tool_calls_made,
+                "tool_calls": tool_results,
+                "tool_call_count": len(tool_results),
+                "metrics": {
+                    "total_tasks": self.total_tasks,
+                    "success_rate": f"{(self.successful_tasks / max(self.total_tasks, 1)) * 100:.1f}%",
+                }
             }
             
-            # Send as artifact
             await updater.add_artifact(
                 parts=[Part(root=TextPart(text=json.dumps(response_data)))],
                 name="Response",
@@ -338,10 +275,9 @@ class LangGraphAgentV2:
             self.successful_tasks += 1
             
         except Exception as e:
-            print(f"❌ Agent error: {e}")
+            print(f"❌ Error: {e}")
             import traceback
             traceback.print_exc()
-            
             await updater.update_status(
                 TaskState.failed,
                 new_agent_text_message(f"Error: {e}")
@@ -349,11 +285,11 @@ class LangGraphAgentV2:
             raise
     
     async def close(self):
-        """Cleanup resources."""
+        """Cleanup."""
         await self.tool_loader.close()
     
     def get_metrics(self) -> Dict:
-        """Get agent metrics."""
+        """Get metrics."""
         return {
             "total_tasks": self.total_tasks,
             "successful_tasks": self.successful_tasks,
@@ -361,7 +297,7 @@ class LangGraphAgentV2:
         }
     
     def reset(self):
-        """Reset agent state."""
+        """Reset metrics."""
         self.total_tasks = 0
         self.successful_tasks = 0
 
@@ -370,4 +306,4 @@ class LangGraphAgentV2:
 # Exports
 # =============================================================================
 
-__all__ = ["LangGraphAgentV2", "MCPToolLoader"]
+__all__ = ["LangGraphAgent", "MCPToolLoader", "AgentState"]
