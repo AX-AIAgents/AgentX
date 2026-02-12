@@ -22,6 +22,7 @@ from langgraph.graph import StateGraph, END, MessagesState
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.tools import Tool
 from langchain_openai import ChatOpenAI
+from langchain.agents import create_agent
 
 from a2a.server.tasks import TaskUpdater
 from a2a.types import Message, TaskState, Part, TextPart
@@ -121,43 +122,18 @@ class MCPToolLoader:
 
 
 # =============================================================================
-# Single Agent Node
+# Agent Configuration
 # =============================================================================
 
 SYSTEM_PROMPT = """You are a helpful AI assistant with access to tools.
 
 When given a task:
-1. Think about what needs to be done
-2. Use available tools when needed
-3. Provide clear, accurate responses
+1. Analyze what needs to be done
+2. Use available tools to gather information
+3. Chain multiple tools if needed
+4. Provide clear, accurate responses
 
-Be direct and efficient."""
-
-
-def agent_node(state: AgentState, model: ChatOpenAI, tools: List[Tool]) -> Dict:
-    """Single unified agent execution node."""
-    messages = state.get("messages", [])
-    
-    # Bind tools to model
-    model_with_tools = model.bind_tools(tools)
-    
-    # Invoke model
-    response = model_with_tools.invoke(messages)
-    
-    # Extract tool calls if any
-    tool_results = []
-    if hasattr(response, 'tool_calls') and response.tool_calls:
-        for tc in response.tool_calls:
-            tool_results.append({
-                "name": tc.get("name", "unknown"),
-                "arguments": tc.get("args", {}),
-            })
-    
-    return {
-        "messages": [response],
-        "tool_results": state.get("tool_results", []) + tool_results,
-        "final_answer": response.content if hasattr(response, 'content') else str(response),
-    }
+Be thorough and efficient."""
 
 
 # =============================================================================
@@ -165,13 +141,48 @@ def agent_node(state: AgentState, model: ChatOpenAI, tools: List[Tool]) -> Dict:
 # =============================================================================
 
 def build_agent_graph(model: ChatOpenAI, tools: List[Tool]):
-    """Build simple single-node graph."""
+    """Build simple single-node graph using create_agent."""
+    # Create agent directly
+    agent_executor = create_agent(
+        llm=model,
+        tools=tools,
+        system_message=SYSTEM_PROMPT,
+    )
+    
+    # Agent node
+    def agent_node(state: AgentState) -> Dict:
+        """Agent execution node."""
+        messages = state.get("messages", [])
+        
+        # Invoke agent
+        result = agent_executor.invoke({"messages": messages})
+        
+        # Extract messages and tool calls
+        result_messages = result.get("messages", [])
+        
+        # Track tool usage
+        tool_results = []
+        final_answer = ""
+        
+        for msg in result_messages:
+            if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    tool_results.append({
+                        "name": tc.get("name", "unknown"),
+                        "arguments": tc.get("args", {}),
+                    })
+            if hasattr(msg, 'content') and msg.content:
+                final_answer = msg.content
+        
+        return {
+            "messages": result_messages,
+            "tool_results": state.get("tool_results", []) + tool_results,
+            "final_answer": final_answer or "Task completed",
+        }
+    
+    # Build graph
     graph = StateGraph(AgentState)
-    
-    # Single agent node
-    graph.add_node("agent", lambda s: agent_node(s, model, tools))
-    
-    # Entry and exit
+    graph.add_node("agent", agent_node)
     graph.set_entry_point("agent")
     graph.add_edge("agent", END)
     
