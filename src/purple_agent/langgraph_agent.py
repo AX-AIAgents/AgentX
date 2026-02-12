@@ -20,7 +20,6 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.tools import Tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END, MessagesState
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode
 
 from a2a.server.tasks import TaskUpdater
@@ -174,8 +173,8 @@ def build_graph(model: ChatOpenAI, tools: List[Tool]):
     else:
         workflow.add_edge("agent", END)
     
-    # Compile
-    return workflow.compile(checkpointer=MemorySaver())
+    # Compile without checkpointer (stateless execution)
+    return workflow.compile()
 
 
 # =============================================================================
@@ -276,7 +275,7 @@ class LangGraphAgentV2:
                 {"role": "user", "content": task_text}
             ]
             
-            # Invoke graph
+            # Invoke graph (stateless execution)
             print(f"🚀 Starting execution...")
             start_time = asyncio.get_event_loop().time()
             
