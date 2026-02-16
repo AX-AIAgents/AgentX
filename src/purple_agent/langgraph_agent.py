@@ -253,7 +253,7 @@ Be persistent and thorough. Do not give up easily."""
 # =============================================================================
 
 
-def build_agent_graph(model: ChatOpenAI, tools: List[Tool]):
+def build_agent_graph(model: any, tools: List[Tool]):
     """Build simple single-node graph using create_agent."""
 
     # Format system prompt with tool names

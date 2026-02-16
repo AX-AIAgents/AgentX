@@ -7,9 +7,11 @@ Purple Agent connects here to discover and call tools.
 NO tau2-bench dependency - uses your MCP servers directly.
 """
 import os
+import sys
 import json
 import asyncio
 from typing import Any
+from pathlib import Path
 
 from dotenv import load_dotenv
 from starlette.applications import Starlette
@@ -20,6 +22,9 @@ import uvicorn
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.types import Tool, TextContent
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Load environment variables from .env
 load_dotenv()
