@@ -13,6 +13,10 @@ env:
   PURPLE_IMAGE_NAME: ${{ github.repository_owner }}/purple-agent
   PURPLE_ADVANCED_IMAGE_NAME: ${{ github.repository_owner }}/agentx-purple
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
