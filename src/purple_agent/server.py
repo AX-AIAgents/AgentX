@@ -35,7 +35,7 @@ from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 from starlette.applications import Starlette
 from starlette.routing import Route
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 from starlette.middleware.cors import CORSMiddleware
 
 # Add src to path
@@ -246,10 +246,15 @@ def main():
     )
     
     # Add custom routes
+    async def agent_card_alias(request):
+        """Redirect to standard agent.json endpoint for AgentBeats compatibility."""
+        return RedirectResponse(url="/.well-known/agent.json")
+    
     custom_routes = [
         Route("/health", health_endpoint, methods=["GET"]),
         Route("/metrics", metrics_endpoint, methods=["GET"]),
         Route("/ready", ready_endpoint, methods=["GET"]),
+        Route("/.well-known/agent-card.json", agent_card_alias, methods=["GET"]),
     ]
     
     # Combine routes
@@ -287,11 +292,12 @@ def main():
     print("     6. ContextEditingMiddleware")
     print()
     print("   Endpoints:")
-    print(f"     GET  /.well-known/agent.json  - Agent Card")
-    print(f"     POST /                        - A2A JSON-RPC")
-    print(f"     GET  /health                  - Health Check")
-    print(f"     GET  /metrics                 - Metrics")
-    print(f"     GET  /ready                   - Readiness Probe")
+    print(f"     GET  /.well-known/agent.json      - Agent Card")
+    print(f"     GET  /.well-known/agent-card.json - Agent Card (alias)")
+    print(f"     POST /                            - A2A JSON-RPC")
+    print(f"     GET  /health                      - Health Check")
+    print(f"     GET  /metrics                     - Metrics")
+    print(f"     GET  /ready                       - Readiness Probe")
     print("=" * 60 + "\n")
     
     # Run server

@@ -26,6 +26,7 @@ from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill
+from starlette.responses import RedirectResponse
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -54,6 +55,10 @@ def start_mcp_server(mcp_port: int) -> subprocess.Popen | None:
     
     if proc.poll() is not None:
         print("❌ MCP Server failed to start")
+        # Print error output
+        if proc.stdout:
+            output = proc.stdout.read().decode('utf-8', errors='ignore')
+            print(f"Error output:\n{output}")
         return None
     
     print(f"✅ MCP Server running (PID: {proc.pid})")
@@ -164,6 +169,18 @@ def main():
             http_handler=request_handler,
         )
         
+        # Build app and add alias endpoint for AgentBeats compatibility
+        app = server.build()
+        
+        async def agent_card_alias(request):
+            """Redirect to standard agent.json endpoint for compatibility."""
+            return RedirectResponse(url="/.well-known/agent.json")
+        
+        from starlette.routing import Route
+        app.routes.append(
+            Route("/.well-known/agent-card.json", agent_card_alias, methods=["GET"])
+        )
+        
         # Print startup info
         print("\n" + "=" * 60)
         print("🟢 AgentX Green Agent (AgentBeats Compatible)")
@@ -176,6 +193,7 @@ def main():
         print("")
         print("   Endpoints:")
         print(f"     GET  /.well-known/agent.json")
+        print(f"     GET  /.well-known/agent-card.json (alias)")
         print(f"     POST / (A2A JSON-RPC)")
         print(f"     GET  /health")
         print("")
@@ -184,7 +202,7 @@ def main():
         print("=" * 60 + "\n")
         
         # Run server
-        uvicorn.run(server.build(), host=args.host, port=args.port)
+        uvicorn.run(app, host=args.host, port=args.port)
         
     finally:
         if mcp_proc:
