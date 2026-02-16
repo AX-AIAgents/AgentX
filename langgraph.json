@@ -1,0 +1,9 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "agent": "./src/purple_agent/langgraph_agent.py:graph"
+  },
+  "env": ".env"
+}

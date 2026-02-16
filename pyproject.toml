@@ -21,6 +21,10 @@ dependencies = [
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
     "langchain-openai>=0.2.0",
+    "grpcio>=1.78.0",
+    "grpcio-status>=1.78.0",
+    "sse-starlette>=2.1.0,<2.2.0",
+    "langgraph-cli[inmem]>=0.4.12",
 ]
 
 [project.scripts]

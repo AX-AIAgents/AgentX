@@ -124,6 +124,7 @@ def main():
             name="MCP Agent Evaluation",
             description=(
                 "Evaluate A2A agents on MCP-based tasks with 3D scoring: "
+                f"Endpoint is /tools all tools list {os.environ['AGENT_PUBLIC_URL']}/tools. "
                 "Action Match (50%), Argument Match (40%), Efficiency (10%). "
                 "Supports 76 tools across Notion, Gmail, Google Drive, YouTube, Search."
             ),
