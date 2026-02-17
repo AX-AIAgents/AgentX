@@ -1,3 +1,4 @@
+# src/langgraph_agent.py
 """
 AgentX LangGraph Agent - Single Graph (create_agent) + Raw MCP Tools
 ===================================================================
@@ -11,10 +12,12 @@ Important:
 - No required/optional fixes
 - No enum/nested schema improvements
 - Tool functions are bound safely (no closure bug)
+- LAZY INIT + retry/backoff (fixes CI/Docker startup race with MCP)
 """
 
 import json
 import asyncio
+import random
 from typing import Any, Dict, List, Optional, Union, Literal
 from pathlib import Path
 
@@ -71,6 +74,7 @@ _JSON_TYPE_MAP = {
     "array": list,
 }
 
+
 def raw_schema_to_args_schema(tool_name: str, raw_schema: Dict[str, Any]) -> type[BaseModel]:
     """
     Convert MCP inputSchema to a minimal Pydantic model WITHOUT modifying required/optional semantics.
@@ -82,7 +86,10 @@ def raw_schema_to_args_schema(tool_name: str, raw_schema: Dict[str, Any]) -> typ
     required: List[str] = raw_schema.get("required") or []
 
     if not props:
-        return create_model(f"{tool_name}_Args", input=(str, Field(..., description="Tool input")))  # type: ignore
+        return create_model(
+            f"{tool_name}_Args",
+            input=(str, Field(..., description="Tool input")),
+        )  # type: ignore
 
     fields: Dict[str, Any] = {}
     for k, v in props.items():
@@ -90,7 +97,7 @@ def raw_schema_to_args_schema(tool_name: str, raw_schema: Dict[str, Any]) -> typ
         t = v.get("type", "string")
         py_t = _JSON_TYPE_MAP.get(t, Any)
 
-        # Best-effort arrays
+        # Best-effort arrays (do not attempt item typing)
         if t == "array":
             py_t = list
 
@@ -140,7 +147,6 @@ class MCPToolLoader:
                 client = await self.get_client()
                 r = await client.post(call_url, json={"name": name, "arguments": kwargs})
                 r.raise_for_status()
-                # Always return JSON string for the model
                 try:
                     return json.dumps(r.json(), ensure_ascii=False, default=str)
                 except Exception:
@@ -197,6 +203,8 @@ class LangGraphAgent:
     """
     Single graph agent using LangChain's create_agent (LangGraph loop).
     Tools are loaded as-is from MCP HTTP server.
+
+    Key: LAZY INIT + retry/backoff to avoid CI/Docker race.
     """
 
     def __init__(
@@ -209,6 +217,9 @@ class LangGraphAgent:
         enable_context_editing: bool = True,
         enable_tool_retry: bool = True,
         debug: bool = False,
+        # init/retry knobs
+        init_max_attempts: int = 18,
+        init_backoff_cap_s: float = 8.0,
     ):
         self.mcp_endpoint = mcp_endpoint
         self.temperature = temperature
@@ -235,9 +246,44 @@ class LangGraphAgent:
         self.total_tasks = 0
         self.successful_tasks = 0
 
-    async def initialize(self):
-        self.tools = await self.tool_loader.load_tools()
+        # lazy init
+        self._initialized = False
+        self._init_lock = asyncio.Lock()
 
+        # retry config
+        self.init_max_attempts = init_max_attempts
+        self.init_backoff_cap_s = init_backoff_cap_s
+
+    async def ensure_initialized(self):
+        if self._initialized and self.graph is not None:
+            return
+
+        async with self._init_lock:
+            if self._initialized and self.graph is not None:
+                return
+
+            await self.initialize()
+            self._initialized = True
+
+    async def initialize(self):
+        # 1) tools: retry/backoff for MCP readiness
+        last_err: Optional[Exception] = None
+        for attempt in range(1, self.init_max_attempts + 1):
+            try:
+                self.tools = await self.tool_loader.load_tools()
+                if self.tools:
+                    break
+            except Exception as e:
+                last_err = e
+
+            # exponential backoff + small jitter
+            sleep_s = min(2 ** (attempt - 1), self.init_backoff_cap_s) + random.uniform(0, 0.35)
+            await asyncio.sleep(sleep_s)
+
+        if not self.tools:
+            raise RuntimeError(f"MCP tools not available after retries: {last_err}")
+
+        # 2) model
         if self.model_instance:
             self.model = self.model_instance
         elif self.model_provider == "local":
@@ -253,6 +299,7 @@ class LangGraphAgent:
         else:
             self.model = ChatOpenAI(model=self.model_name, temperature=self.temperature)
 
+        # 3) middleware
         middleware = []
 
         if self.enable_tool_retry:
@@ -275,6 +322,7 @@ class LangGraphAgent:
             middleware.append(ModelCallLimitMiddleware(run_limit=25, exit_behavior="end"))
             middleware.append(ToolCallLimitMiddleware(run_limit=25, exit_behavior="continue"))
 
+        # 4) prompt + graph
         tool_names = ", ".join([t.name for t in self.tools])
         formatted_prompt = SYSTEM_PROMPT.replace("{tool_names}", tool_names)
 
@@ -295,7 +343,12 @@ class LangGraphAgent:
         for msg in messages:
             if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
                 for tc in msg.tool_calls:
-                    tool_calls.append({"name": tc.get("name", "unknown"), "arguments": tc.get("args", {})})
+                    tool_calls.append(
+                        {
+                            "name": tc.get("name", "unknown"),
+                            "arguments": tc.get("args", {}),
+                        }
+                    )
 
         for msg in reversed(messages):
             if isinstance(msg, AIMessage) and (msg.content or "").strip() and not getattr(msg, "tool_calls", None):
@@ -311,8 +364,7 @@ class LangGraphAgent:
         return {"final_answer": final_answer or "Task completed", "tool_calls": tool_calls}
 
     async def run(self, message: Message, updater: TaskUpdater) -> None:
-        if self.graph is None:
-            await self.initialize()
+        await self.ensure_initialized()
 
         self.total_tasks += 1
         task_text = get_message_text(message)
@@ -321,7 +373,7 @@ class LangGraphAgent:
 
         try:
             result = await asyncio.to_thread(
-                self.graph.invoke,
+                self.graph.invoke,  # type: ignore[union-attr]
                 {"messages": [HumanMessage(content=task_text)]},
                 {"configurable": {"thread_id": str(self.total_tasks)}},
             )
@@ -355,6 +407,8 @@ class LangGraphAgent:
 
     def get_metrics(self) -> Dict[str, Any]:
         return {
+            "initialized": self._initialized,
+            "tools_count": len(self.tools),
             "total_tasks": self.total_tasks,
             "successful_tasks": self.successful_tasks,
             "success_rate": f"{(self.successful_tasks / max(self.total_tasks, 1)) * 100:.1f}%",
@@ -366,7 +420,7 @@ class LangGraphAgent:
 
 
 # =============================================================================
-# Graph Instance for LangGraph Server
+# Exports for imports (NO import-time init)
 # =============================================================================
 
 agent = LangGraphAgent(
@@ -379,25 +433,7 @@ agent = LangGraphAgent(
     debug=False,
 )
 
+# Some frameworks want "graph" symbol; we keep it None (lazy init fills agent.graph)
 graph = None
-
-import sys
-import os
-
-is_test_run = any("test" in arg for arg in sys.argv)
-if os.getenv("SKIP_AGENT_INIT") != "true" and not is_test_run:
-    try:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop and loop.is_running():
-            pass
-        else:
-            asyncio.run(agent.initialize())
-            graph = agent.graph
-    except Exception as e:
-        print(f"⚠️ Agent initialization skipped or failed: {e}")
 
 __all__ = ["LangGraphAgent", "MCPToolLoader", "agent", "graph"]
