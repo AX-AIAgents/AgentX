@@ -30,11 +30,13 @@ load_dotenv()
 # -----------------------
 DATASET_NAME = "purple-agent-benchmark-v1"
 # Ensure we use the base URL for discovery (remove /mcp suffix if present)
-_endpoint = os.getenv("MCP_ENDPOINT", "http://localhost:8090")
+_endpoint = os.getenv("MCP_ENDPOINT", "http://localhost:8091")
 if _endpoint.endswith("/mcp"):
     _endpoint = _endpoint[:-4]
 MCP_ENDPOINT = _endpoint
 
+# Model selection: Set USE_LOCAL_MODEL=true to use Qwen instead of OpenAI
+USE_LOCAL_MODEL = os.getenv("USE_LOCAL_MODEL", "false").lower() == "true"
 MODEL_NAME = os.getenv("MODEL", "gpt-4o-mini")
 
 # -----------------------
@@ -47,20 +49,36 @@ async def get_agent():
     global agent_instance
     async with _init_lock:
         if agent_instance is None:
-            print(f"🔄 Initializing Evaluator Agent (Model: {MODEL_NAME})...")
-            # Create instance but do not initialize yet
+            if USE_LOCAL_MODEL:
+                print(f"🔄 Initializing Agent with LocalModel (Qwen)...")
+                print(f"💰 Cost savings: ~95% vs OpenAI")
+                
+                # Import LocalModel
+                try:
+                    from custom_qwen import LocalModel
+                    model = LocalModel(temperature=0.0, max_tokens=4096)
+                    model_provider = "custom"
+                except ImportError as e:
+                    print(f"⚠️ LocalModel not available: {e}")
+                    print(f"   Falling back to OpenAI")
+                    model = MODEL_NAME
+                    model_provider = "openai"
+            else:
+                print(f"🔄 Initializing Agent with OpenAI ({MODEL_NAME})...")
+                model = MODEL_NAME
+                model_provider = "openai"
+            
+            print(f"🔗 MCP Endpoint: {MCP_ENDPOINT}")
+            
+            # Create agent
             agent = LangGraphAgent(
                 mcp_endpoint=MCP_ENDPOINT,
-                model=MODEL_NAME
+                model=model,
+                model_provider=model_provider
             )
+            print(f"🔍 Agent instance created")
+            
             try:
-                # Override discover_capabilities logic to ensure correct endpoint usage
-                # The agent internally calls discover_capabilities.
-                # We can update the endpoint if needed, but LangGraphAgent uses env var MCP_SERVER_URL via discover_capabilities
-                # So setting the env var or passing it might be needed.
-                # Actually LangGraphAgent.__init__ doesn't take mcp_endpoint anymore in the latest code? 
-                # Let's check the code for LangGraphAgent later if this fails.
-                # Assuming standard init for now.
                 await agent.initialize()
                 
                 if agent.graph is None:

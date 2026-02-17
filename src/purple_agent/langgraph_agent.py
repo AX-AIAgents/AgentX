@@ -1,60 +1,123 @@
 """
-AgentX LangGraph Agent - Simplified Single Node Architecture
-============================================================
-Clean, minimal agent with single execution node.
+AgentX LangGraph Agent - Single Graph (create_agent) + Raw MCP Tools
+===================================================================
 
-Architecture:
-- One unified agent node with tools
-- Simple state management
-- Direct execution, no routing overhead
+Goal: Use MCP tools "as-is" (no schema normalization/sanitization).
+- Reads /tools from MCP HTTP server
+- Calls /tools/call
+- create_agent provides the LangGraph loop (single graph)
+
+Important:
+- No required/optional fixes
+- No enum/nested schema improvements
+- Tool functions are bound safely (no closure bug)
 """
 
 import json
 import asyncio
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional, Union, Literal
 from pathlib import Path
 
 import httpx
-from pydantic import BaseModel, Field
+import anyio
+from pydantic import BaseModel, Field, create_model
+
 from langchain_core.messages import HumanMessage, AIMessage
-from langgraph.graph.message import add_messages
-from langgraph.graph import StateGraph, END, MessagesState
-from langchain_core.tools import Tool
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
+
 from langchain.agents import create_agent
-from langchain.agents.middleware import ToolRetryMiddleware, ContextEditingMiddleware, ClearToolUsesEdit
+from langchain.agents.middleware import (
+    ToolRetryMiddleware,
+    ContextEditingMiddleware,
+    ClearToolUsesEdit,
+    ToolCallLimitMiddleware,
+    ModelCallLimitMiddleware,
+)
 
 from a2a.server.tasks import TaskUpdater
 from a2a.types import Message, TaskState, Part, TextPart
 from a2a.utils import get_message_text, new_agent_text_message
 
 
+SYSTEM_PROMPT = """You are a highly capable AI assistant with access to a wide range of tools.
+
+Your Goal: Complete the user's request accurately by chaining the necessary tools in the correct order.
+
+Instructions:
+1. PLAN: Before taking action, analyze the request. Break it down into logical steps.
+2. SEARCH: If you need to find a resource, use the appropriate search tool first. Do not hallucinate IDs or paths.
+3. EXECUTE: Call tools one by one. Check tool output before proceeding.
+4. ARGUMENTS: Be precise with tool arguments. If a tool requires an ID, obtain it from a previous tool call.
+5. RELIABILITY: Prefer small, verifiable steps. If a tool fails, retry or adapt.
+
+Tools available: {tool_names}
+Be persistent and thorough. Do not give up easily.
+"""
+
+
 # =============================================================================
-# Simple State
+# "Raw" schema -> minimal args_schema
+# (NO normalization; just best-effort to help LangChain pass kwargs)
 # =============================================================================
 
+_JSON_TYPE_MAP = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+    "object": dict,
+    "array": list,
+}
 
-class AgentState(MessagesState):
-    """Minimal state tracking."""
+def raw_schema_to_args_schema(tool_name: str, raw_schema: Dict[str, Any]) -> type[BaseModel]:
+    """
+    Convert MCP inputSchema to a minimal Pydantic model WITHOUT modifying required/optional semantics.
+    - If schema is missing/empty -> fallback to {"input": str}
+    - Types are best-effort (no enum/nested recursion)
+    """
+    raw_schema = raw_schema or {}
+    props: Dict[str, Any] = raw_schema.get("properties") or {}
+    required: List[str] = raw_schema.get("required") or []
 
-    tool_results: List[Dict[str, Any]] = []
-    final_answer: str = ""
+    if not props:
+        return create_model(f"{tool_name}_Args", input=(str, Field(..., description="Tool input")))  # type: ignore
+
+    fields: Dict[str, Any] = {}
+    for k, v in props.items():
+        v = v or {}
+        t = v.get("type", "string")
+        py_t = _JSON_TYPE_MAP.get(t, Any)
+
+        # Best-effort arrays
+        if t == "array":
+            py_t = list
+
+        desc = v.get("description") or ""
+        default = ... if (k in required) else None
+        fields[k] = (py_t, Field(default=default, description=desc))
+
+    return create_model(f"{tool_name}_Args", **fields)  # type: ignore
 
 
 # =============================================================================
-# MCP Tool Loading
+# MCP Tool Loader (HTTP)
 # =============================================================================
-
 
 class MCPToolLoader:
-    """Load MCP tools and convert to LangChain format using Agent Discovery."""
+    """
+    Loads MCP tools from an HTTP MCP server that exposes:
+      GET  /tools      -> {"tools":[{name, description, inputSchema, ...}]}
+      POST /tools/call -> {name, arguments} -> JSON result
+    """
 
     def __init__(self, mcp_endpoint: str):
         self.mcp_endpoint = mcp_endpoint.rstrip("/")
         self._client: Optional[httpx.AsyncClient] = None
-        self._tools_cache: List[Tool] = []
-        self.agent_card: Dict[str, Any] = {}
-        self.tools_endpoint: Optional[str] = None
+        self._tools_cache: List[StructuredTool] = []
+        self.tools_url = f"{self.mcp_endpoint}/tools"
+        self.call_url = f"{self.mcp_endpoint}/tools/call"
 
     async def get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -65,349 +128,211 @@ class MCPToolLoader:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
-    async def discover_capabilities(self) -> bool:
+    def _make_tool(self, name: str, description: str, args_schema: type[BaseModel]) -> StructuredTool:
         """
-        Check /.well-known/agent.json to discover capabilities and tool endpoints.
-        Returns True if tools should be loaded.
+        Factory to avoid Python closure bugs in loops.
+        Uses call_url fixed for this MCP server.
         """
-        print(f"🔍 Discovering agent capabilities at {self.mcp_endpoint}...")
-        client = await self.get_client()
+        call_url = self.call_url
 
-        try:
-            # 1. Try Agent Card
-            response = await client.get(f"{self.mcp_endpoint}/.well-known/agent.json")
-            if response.status_code == 200:
-                self.agent_card = response.json()
-                print(f"✅ Found Agent Card: {self.agent_card.get('name', 'Unknown')}")
+        async def _arun_tool(**kwargs) -> str:
+            try:
+                client = await self.get_client()
+                r = await client.post(call_url, json={"name": name, "arguments": kwargs})
+                r.raise_for_status()
+                # Always return JSON string for the model
+                try:
+                    return json.dumps(r.json(), ensure_ascii=False, default=str)
+                except Exception:
+                    return r.text
+            except Exception as e:
+                return json.dumps({"error": str(e), "tool": name}, ensure_ascii=False)
 
-                # Analyze for tool endpoints
-                # Strategy 1: Look for explicit 'tools_url' or similiar fields (future standard)
-                if self.agent_card.get("tools_url"):
-                    self.tools_endpoint = self.agent_card["tools_url"]
-                    print(f"   Tools endpoint found in card: {self.tools_endpoint}")
-                    return True
+        def _run_tool(**kwargs) -> str:
+            # Loop-safe: run async tool in anyio
+            try:
+                return anyio.from_thread.run(_arun_tool, **kwargs)
+            except RuntimeError:
+                return anyio.run(_arun_tool, **kwargs)
 
-                # Strategy 2: Scan description/skills for URIs
-                import re
+        return StructuredTool(
+            name=name,
+            description=description,
+            args_schema=args_schema,
+            func=_run_tool,
+            coroutine=_arun_tool,
+        )
 
-                description = str(self.agent_card)
-                # Matches http(s)://.../tools
-                url_match = re.search(r'https?://[^\s"]+/tools', description)
-                if url_match:
-                    self.tools_endpoint = url_match.group(0)
-                    print(
-                        f"   Tools endpoint extracted from description: {self.tools_endpoint}"
-                    )
-                    return True
-
-                # Strategy 3: Check keywords indicating MCP/tools support
-                keywords = ["mcp", "tool", "function", "skill"]
-                if any(k in description.lower() for k in keywords):
-                    print(
-                        "   Agent mentions tools/MCP, assuming default /tools endpoint."
-                    )
-                    self.tools_endpoint = f"{self.mcp_endpoint}/tools"
-                    return True
-            else:
-                print(
-                    f"⚠️ No Agent Card found (HTTP {response.status_code}). Assumption: Standard MCP."
-                )
-
-        except Exception as e:
-            print(f"⚠️ Discovery error: {e}")
-
-        # Fallback: Assume standard MCP /tools if nothing else found but we were told this IS an MCP endpoint
-        if not self.tools_endpoint:
-            self.tools_endpoint = f"{self.mcp_endpoint}/tools"
-
-        return True
-
-    async def load_tools(self) -> List[Tool]:
-        """Fetch and convert MCP tools."""
+    async def load_tools(self) -> List[StructuredTool]:
         if self._tools_cache:
             return self._tools_cache
 
-        # Ensure discovery happened
-        if not self.tools_endpoint:
-            should_load = await self.discover_capabilities()
-            if not should_load:
-                print("ℹ️ Agent does not appear to support tools.")
-                return []
+        client = await self.get_client()
+        r = await client.get(self.tools_url)
+        r.raise_for_status()
 
-        try:
-            print(f"📥 Loading tools from: {self.tools_endpoint}")
-            client = await self.get_client()
-            # If we extracted a full URL, use it. Otherwise append to base.
-            url = (
-                self.tools_endpoint
-                if "://" in self.tools_endpoint
-                else f"{self.mcp_endpoint}/{self.tools_endpoint.lstrip('/')}"
-            )
+        data = r.json()
+        mcp_tools = data.get("tools") or []
 
-            response = await client.get(url)
+        tools: List[StructuredTool] = []
+        for t in mcp_tools:
+            name = t.get("name") or ""
+            description = t.get("description") or f"Execute {name}"
+            raw_schema = t.get("inputSchema") or {}
 
-            if response.status_code != 200:
-                print(f"⚠️ Failed to load tools from {url}: HTTP {response.status_code}")
-                return []
+            # Use schema as-is (no normalization)
+            args_schema = raw_schema_to_args_schema(name, raw_schema)
 
-            data = response.json()
-            mcp_tools = data.get("tools", [])
+            tools.append(self._make_tool(name, description, args_schema))
 
-            print(f"✅ Loaded {len(mcp_tools)} MCP tools")
-
-            # Convert to LangChain Tools
-            langchain_tools = []
-            for mcp_tool in mcp_tools:
-                name = mcp_tool.get("name", "")
-                description = mcp_tool.get("description", f"Execute {name}")
-
-                # Create closure with proper binding
-                def make_tool_func(t_name, t_endpoint, t_schema):
-                    async def execute_tool(*args, **kwargs) -> str:
-                        try:
-                            # Handle positional arguments (LangChain sometimes passes single string arg)
-                            # If we have args and the schema has exactly one required property, map it.
-                            final_args = kwargs.copy()
-                            if args:
-                                # Simple heuristic: if 1 arg and it's a string, and schema has 1 property
-                                # or we just take the first property.
-                                # For now, let's just update kwargs if empty.
-                                if not final_args and len(args) == 1:
-                                    # Try to guess key from schema
-                                    props = (
-                                        t_schema.get("inputSchema", {})
-                                        .get("properties", {})
-                                        .keys()
-                                    )
-                                    if props:
-                                        first_key = list(props)[0]
-                                        final_args[first_key] = args[0]
-                                    else:
-                                        # Fallback, maybe 'input' or 'query'
-                                        final_args["input"] = args[0]
-
-                            # Construct call URL
-                            # If endpoint is http://host/tools -> call is http://host/tools/call
-                            call_url = f"{t_endpoint}/call"
-
-                            nonlocal self
-                            client = await self.get_client()
-
-                            response = await client.post(
-                                call_url, json={"name": t_name, "arguments": final_args}
-                            )
-                            result = response.json()
-                            return json.dumps(result, default=str)
-                        except Exception as e:
-                            return json.dumps({"error": str(e)})
-
-                    def sync_wrapper(*args, **kwargs) -> str:
-                        return asyncio.run(execute_tool(*args, **kwargs))
-
-                    return sync_wrapper, execute_tool
-
-                sync_func, async_func = make_tool_func(name, url, mcp_tool)
-
-                # Note: We stick to plain Tool for now, relying on LLM to pass kwargs correctly.
-                # Ideally we would use StructuredTool with a dynamic Pydantic model.
-
-                tool = Tool(
-                    name=name,
-                    description=description,
-                    func=sync_func,
-                    coroutine=async_func,
-                )
-                langchain_tools.append(tool)
-
-            self._tools_cache = langchain_tools
-            return langchain_tools
-
-        except Exception as e:
-            print(f"❌ Error loading tools: {e}")
-            return []
+        self._tools_cache = tools
+        return tools
 
 
 # =============================================================================
-# Agent Configuration
+# Agent
 # =============================================================================
-
-SYSTEM_PROMPT = """You are a highly capable AI assistant with access to a wide range of tools.
-
-Your Goal: Complete the user's request accurately by chaining the necessary tools in the correct order.
-
-Instructions:
-1. **PLAN:** Before taking action, analyze the request. Break it down into logical steps.
-   - Example: "Search Drive for file" -> "Read file content" -> "Send email".
-2. **SEARCH:** If you need to find a resource (file, email, video), use the appropriate search tool first. Do not hallucinate IDs or paths.
-3. **EXECUTE:** Call the tools one by one. Check the output of each tool before proceeding to the next step.
-   - If a tool fails or returns empty results, try a different query or approach.
-4. **ARGUMENTS:** precise with tool arguments. If a tool requires a specific ID (like a video ID or file ID), ensure you have obtained it from a previous step.
-
-Tools available: {tool_names}
-
-Be persistent and thorough. Do not give up easily."""
-
-
-# =============================================================================
-# Graph Builder
-# =============================================================================
-
-
-def build_agent_graph(model: any, tools: List[Tool]):
-    """Build simple single-node graph using create_agent."""
-
-    # Format system prompt with tool names
-    tool_names = ", ".join([t.name for t in tools])
-    formatted_prompt = SYSTEM_PROMPT.replace("{tool_names}", tool_names)
-
-    # Create agent directly
-    purple_agent = create_agent(
-        model=model,
-        tools=tools,
-        system_prompt=formatted_prompt,
-        middleware=[
-            ToolRetryMiddleware(
-                max_retries=3,
-                backoff_factor=2.0,
-                initial_delay=1.0,
-            ),
-            ContextEditingMiddleware(
-                edits=[
-                    ClearToolUsesEdit(
-                        trigger=100000,
-                        keep=3,
-                    ),
-                ],
-            ),
-        ],
-    )
-
-    # Agent node
-    def agent_node(state: AgentState) -> Dict:
-        """Agent execution node."""
-        messages = state.get("messages", [])
-
-        # Invoke agent
-        result = purple_agent.invoke({"messages": messages})
-
-        # Extract messages and tool calls
-        result_messages = result.get("messages", [])
-
-        # Track tool usage
-        tool_results = []
-        final_answer = ""
-
-        for msg in result_messages:
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                for tc in msg.tool_calls:
-                    tool_results.append(
-                        {
-                            "name": tc.get("name", "unknown"),
-                            "arguments": tc.get("args", {}),
-                        }
-                    )
-            if hasattr(msg, "content") and msg.content:
-                final_answer = msg.content
-
-        return {
-            "messages": result_messages,
-            "tool_results": state.get("tool_results", []) + tool_results,
-            "final_answer": final_answer or "Task completed",
-        }
-
-    # Build graph
-    graph = StateGraph(AgentState)
-    graph.add_node("agent", agent_node)
-    graph.set_entry_point("agent")
-    graph.add_edge("agent", END)
-
-    return graph.compile()
-
-
-# =============================================================================
-# Main Agent Class
-# =============================================================================
-
 
 class LangGraphAgent:
     """
-    Simplified LangGraph agent with single execution node.
-
-    Features:
-    - Clean single-node architecture
-    - Direct tool execution
-    - Minimal state management
-    - Works with ANY MCP server
+    Single graph agent using LangChain's create_agent (LangGraph loop).
+    Tools are loaded as-is from MCP HTTP server.
     """
 
     def __init__(
         self,
         mcp_endpoint: str,
-        model: str = "gpt-4o-mini",
+        model: Union[str, BaseChatModel] = "gpt-4o-mini",
         temperature: float = 0.0,
+        model_provider: Literal["openai", "local"] = "openai",
+        enable_limits: bool = True,
+        enable_context_editing: bool = True,
+        enable_tool_retry: bool = True,
+        debug: bool = False,
     ):
         self.mcp_endpoint = mcp_endpoint
-        self.model_name = model
         self.temperature = temperature
+        self.model_provider = model_provider
+        self.debug = debug
+
+        if isinstance(model, str):
+            self.model_name = model
+            self.model_instance = None
+        else:
+            self.model_name = getattr(model, "model", "custom-model")
+            self.model_instance = model
+            self.model_provider = "custom"
 
         self.tool_loader = MCPToolLoader(mcp_endpoint)
+        self.tools: List[StructuredTool] = []
         self.graph = None
-        self.tools = []
-        self.model = None
+        self.model: Optional[BaseChatModel] = None
 
-        # Metrics
+        self.enable_limits = enable_limits
+        self.enable_context_editing = enable_context_editing
+        self.enable_tool_retry = enable_tool_retry
+
         self.total_tasks = 0
         self.successful_tasks = 0
 
     async def initialize(self):
-        """Load tools and build graph."""
-        print(f"🔧 Initializing LangGraph Agent...")
-        print(f"   Model: {self.model_name}")
-        print(f"   MCP: {self.mcp_endpoint}")
-
-        # Load tools
         self.tools = await self.tool_loader.load_tools()
-        print(f"✅ Loaded {len(self.tools)} tools")
 
-        # Create model
-        self.model = ChatOpenAI(
-            model=self.model_name,
-            temperature=self.temperature,
-        ).with_config({"configurable": {"system_message": SYSTEM_PROMPT}})
+        if self.model_instance:
+            self.model = self.model_instance
+        elif self.model_provider == "local":
+            try:
+                import sys
+                project_root = Path(__file__).resolve().parent.parent.parent
+                if str(project_root) not in sys.path:
+                    sys.path.insert(0, str(project_root))
+                from custom_qwen import LocalModel
+                self.model = LocalModel(temperature=self.temperature)
+            except Exception:
+                self.model = ChatOpenAI(model=self.model_name, temperature=self.temperature)
+        else:
+            self.model = ChatOpenAI(model=self.model_name, temperature=self.temperature)
 
-        # Build graph
-        self.graph = build_agent_graph(self.model, self.tools)
-        print(f"✅ Agent ready")
+        middleware = []
+
+        if self.enable_tool_retry:
+            middleware.append(
+                ToolRetryMiddleware(
+                    max_retries=3,
+                    backoff_factor=2.0,
+                    initial_delay=1.0,
+                )
+            )
+
+        if self.enable_context_editing:
+            middleware.append(
+                ContextEditingMiddleware(
+                    edits=[ClearToolUsesEdit(trigger=100000, keep=3)],
+                )
+            )
+
+        if self.enable_limits:
+            middleware.append(ModelCallLimitMiddleware(run_limit=25, exit_behavior="end"))
+            middleware.append(ToolCallLimitMiddleware(run_limit=25, exit_behavior="continue"))
+
+        tool_names = ", ".join([t.name for t in self.tools])
+        formatted_prompt = SYSTEM_PROMPT.replace("{tool_names}", tool_names)
+
+        self.graph = create_agent(
+            model=self.model,
+            tools=self.tools,
+            system_prompt=formatted_prompt,
+            middleware=middleware,
+            debug=self.debug,
+            name="agentx-purple-agent",
+        )
+
+    @staticmethod
+    def _extract(messages: List[Any]) -> Dict[str, Any]:
+        tool_calls: List[Dict[str, Any]] = []
+        final_answer = ""
+
+        for msg in messages:
+            if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+                for tc in msg.tool_calls:
+                    tool_calls.append({"name": tc.get("name", "unknown"), "arguments": tc.get("args", {})})
+
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and (msg.content or "").strip() and not getattr(msg, "tool_calls", None):
+                final_answer = msg.content
+                break
+
+        if not final_answer:
+            for msg in reversed(messages):
+                if isinstance(msg, AIMessage) and (msg.content or "").strip():
+                    final_answer = msg.content
+                    break
+
+        return {"final_answer": final_answer or "Task completed", "tool_calls": tool_calls}
 
     async def run(self, message: Message, updater: TaskUpdater) -> None:
-        """Execute agent (A2A interface)."""
         if self.graph is None:
             await self.initialize()
 
         self.total_tasks += 1
         task_text = get_message_text(message)
 
-        await updater.update_status(
-            TaskState.working, new_agent_text_message("Processing...")
-        )
+        await updater.update_status(TaskState.working, new_agent_text_message("Processing..."))
 
         try:
-            # Execute graph
             result = await asyncio.to_thread(
                 self.graph.invoke,
                 {"messages": [HumanMessage(content=task_text)]},
                 {"configurable": {"thread_id": str(self.total_tasks)}},
             )
 
-            # Extract results
-            final_answer = result.get("final_answer", "Task completed")
-            tool_results = result.get("tool_results", [])
+            messages = result.get("messages", []) if isinstance(result, dict) else []
+            extracted = self._extract(messages)
 
-            # Build response
             response_data = {
-                "response": final_answer,
-                "tool_calls": tool_results,
-                "tool_call_count": len(tool_results),
+                "response": extracted["final_answer"],
+                "tool_calls": extracted["tool_calls"],
+                "tool_call_count": len(extracted["tool_calls"]),
                 "metrics": {
                     "total_tasks": self.total_tasks,
                     "success_rate": f"{(self.successful_tasks / max(self.total_tasks, 1)) * 100:.1f}%",
@@ -415,28 +340,20 @@ class LangGraphAgent:
             }
 
             await updater.add_artifact(
-                parts=[Part(root=TextPart(text=json.dumps(response_data)))],
+                parts=[Part(root=TextPart(text=json.dumps(response_data, ensure_ascii=False)))],
                 name="Response",
             )
 
             self.successful_tasks += 1
 
         except Exception as e:
-            print(f"❌ Error: {e}")
-            import traceback
-
-            traceback.print_exc()
-            await updater.update_status(
-                TaskState.failed, new_agent_text_message(f"Error: {e}")
-            )
+            await updater.update_status(TaskState.failed, new_agent_text_message(f"Error: {e}"))
             raise
 
     async def close(self):
-        """Cleanup."""
         await self.tool_loader.close()
 
-    def get_metrics(self) -> Dict:
-        """Get metrics."""
+    def get_metrics(self) -> Dict[str, Any]:
         return {
             "total_tasks": self.total_tasks,
             "successful_tasks": self.successful_tasks,
@@ -444,39 +361,31 @@ class LangGraphAgent:
         }
 
     def reset(self):
-        """Reset metrics."""
         self.total_tasks = 0
         self.successful_tasks = 0
-
-
-# =============================================================================
-# Exports
-# =============================================================================
-
-__all__ = ["LangGraphAgent", "MCPToolLoader", "AgentState", "graph"]
 
 
 # =============================================================================
 # Graph Instance for LangGraph Server
 # =============================================================================
 
-# Create default agent instance for langgraph.json
 agent = LangGraphAgent(
     mcp_endpoint="http://localhost:8091",
     model="gpt-4o-mini",
     temperature=0.0,
+    enable_limits=True,
+    enable_context_editing=True,
+    enable_tool_retry=True,
+    debug=False,
 )
 
-# Initialize and expose graph safely
 graph = None
+
 import sys
 import os
 
-# Check if we are being imported by a test script or if explicit skip is set
 is_test_run = any("test" in arg for arg in sys.argv)
 if os.getenv("SKIP_AGENT_INIT") != "true" and not is_test_run:
-    import asyncio
-
     try:
         try:
             loop = asyncio.get_running_loop()
@@ -490,3 +399,5 @@ if os.getenv("SKIP_AGENT_INIT") != "true" and not is_test_run:
             graph = agent.graph
     except Exception as e:
         print(f"⚠️ Agent initialization skipped or failed: {e}")
+
+__all__ = ["LangGraphAgent", "MCPToolLoader", "agent", "graph"]

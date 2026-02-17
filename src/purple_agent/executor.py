@@ -33,7 +33,7 @@ from src.purple_agent.agent import AdvancedPurpleAgent, ModelConfig, RetryConfig
 # Optional LangGraph support
 try:
     from langgraph_agent import LangGraphAgent
-    LANGGRAPH_AVAILABLE = False
+    LANGGRAPH_AVAILABLE = True
 except ImportError:
     LANGGRAPH_AVAILABLE = False
     LangGraphAgent = None
