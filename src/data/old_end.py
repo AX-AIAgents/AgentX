@@ -1,26 +1,23 @@
 """
 AgentX LangGraph Agent
 ======================
-Benchmark-optimized agent powered by LangChain's create_agent.
+Clean agent powered by LangChain's create_agent (which returns a LangGraph graph).
 
 Architecture:
 - create_agent provides the compiled LangGraph graph with built-in tool loop
 - MCPToolLoader handles discovery and conversion of MCP tools
-- Middleware stack: retry, summarization, error handling, logging
 - LangGraphAgent orchestrates initialization, execution, and lifecycle
 """
 
 import json
 import asyncio
-import logging
 import os
 import re
 import sys
-import traceback
 from typing import List, Dict, Any, Optional, Union, Literal
 
 import httpx
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import Tool
 from langchain_openai import ChatOpenAI
@@ -29,19 +26,11 @@ from langchain.agents.middleware import (
     ToolRetryMiddleware,
     ContextEditingMiddleware,
     ClearToolUsesEdit,
-    SummarizationMiddleware,
-    AgentMiddleware,
-    ModelRequest,
-    ModelResponse,
-    wrap_tool_call,
-    before_model,
 )
 
 from a2a.server.tasks import TaskUpdater
 from a2a.types import Message, TaskState, Part, TextPart
 from a2a.utils import get_message_text, new_agent_text_message
-
-logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -185,80 +174,24 @@ def _resolve_args(
 
 
 # =============================================================================
-# Custom Middleware: Tool Error Handler
-# =============================================================================
-
-
-@wrap_tool_call
-def _handle_tool_errors(request, handler):
-    """Catch tool exceptions and return model-friendly error messages.
-
-    Instead of raw stack traces the LLM sees a short, actionable hint so it
-    can retry with different arguments or choose an alternative tool.
-    """
-    try:
-        return handler(request)
-    except Exception as e:
-        tool_name = request.tool_call.get("name", "unknown")
-        error_msg = (
-            f"Tool '{tool_name}' failed: {e}. "
-            "Check your arguments and try again, or use an alternative approach."
-        )
-        logger.warning("Tool error [%s]: %s", tool_name, e)
-        return ToolMessage(
-            content=error_msg,
-            tool_call_id=request.tool_call["id"],
-        )
-
-
-# =============================================================================
-# Custom Middleware: Observability Logger
-# =============================================================================
-
-
-@before_model
-def _log_model_call(state, runtime) -> None:
-    """Log context size before each LLM call for observability."""
-    messages = state.get("messages", [])
-    tool_msgs = sum(1 for m in messages if isinstance(m, ToolMessage))
-    logger.info(
-        "🧠 LLM call: %d messages (%d tool results)",
-        len(messages),
-        tool_msgs,
-    )
-    return None
-
-
-# =============================================================================
 # System Prompt
 # =============================================================================
 
-SYSTEM_PROMPT = """You are a highly capable AI assistant competing in a benchmark evaluation. You have access to tools that interact with real services (Google Drive, Gmail, YouTube, Notion, Web Search, etc.).
+SYSTEM_PROMPT = """You are a highly capable AI assistant with access to a wide range of tools.
 
-Your Goal: Complete every task accurately by calling the RIGHT tools with CORRECT arguments.
+Your Goal: Complete the user's request accurately by chaining the necessary tools in the correct order.
 
-## Execution Strategy
-
-1. **DECOMPOSE** the request into atomic steps. Identify which tools are needed and in what order.
-2. **SEARCH FIRST** — never guess or hallucinate IDs, file names, or URLs. Always use a search/list tool to discover resources before operating on them.
-3. **CHAIN RESULTS** — use output from one tool as input to the next. For example:
-   - `google_search` → get URL → `get_transcript` or `scrape`
-   - `search` or `listFolder` → get document ID → `getGoogleDocContent`
-   - Research results → `createGoogleDoc` or `API-post-page` → `draft_email` or `send_email`
-4. **ARGUMENTS MATTER** — always provide ALL required arguments:
-   - `google_search`: include `q`, `gl`, `hl` parameters
-   - `get_transcript`: provide the full video URL (https://...)
-   - `createGoogleDoc`: include `name`, `content`, and `parentFolderId` when available
-   - `draft_email` / `send_email`: include `to` (valid email), `subject`, and `body`
-   - `API-post-page`: provide complete page structure with title and content blocks
-   - `API-patch-block-children`: provide `block_id` and `children` array
-   - `createFolder`: include `name` and `parent` if available
-5. **RECOVER from errors** — if a tool fails, try alternative arguments or a different approach. Do not give up.
-6. **BE EFFICIENT** — complete the task in as few steps as possible. Avoid redundant tool calls.
+Instructions:
+1. **PLAN:** Before taking action, analyze the request. Break it down into logical steps.
+   - Example: "Search Drive for file" -> "Read file content" -> "Send email".
+2. **SEARCH:** If you need to find a resource (file, email, video), use the appropriate search tool first. Do not hallucinate IDs or paths.
+3. **EXECUTE:** Call the tools one by one. Check the output of each tool before proceeding to the next step.
+   - If a tool fails or returns empty results, try a different query or approach.
+4. **ARGUMENTS:** Be precise with tool arguments. If a tool requires a specific ID (like a video ID or file ID), ensure you have obtained it from a previous step.
 
 Tools available: {tool_names}
 
-Remember: You are being scored on (1) calling the correct tools, (2) providing correct arguments, and (3) efficiency. Be thorough and precise."""
+Be persistent and thorough. Do not give up easily."""
 
 
 # =============================================================================
@@ -359,12 +292,8 @@ class LangGraphAgent:
     def _build_graph(model: BaseChatModel, tools: List[Tool]):
         """Create the compiled LangGraph graph via create_agent.
 
-        Middleware stack (executed in order):
-        1. _log_model_call      — observability: log context size before each LLM call
-        2. SummarizationMiddleware — compress long conversations to stay within context
-        3. ToolRetryMiddleware   — retry failed tool calls with jitter + backoff
-        4. _handle_tool_errors   — catch unrecoverable tool errors, return friendly msg
-        5. ContextEditingMiddleware — prune old tool uses if context grows extreme
+        create_agent already returns a compiled graph with an internal
+        tool-calling loop — no need to wrap it in another StateGraph.
         """
         tool_names = ", ".join(t.name for t in tools)
         prompt = SYSTEM_PROMPT.replace("{tool_names}", tool_names)
@@ -374,28 +303,14 @@ class LangGraphAgent:
             tools=tools,
             system_prompt=prompt,
             middleware=[
-                _log_model_call,
-                SummarizationMiddleware(
-                    model="gpt-4o-mini",
-                    trigger=[
-                        ("tokens", 80_000),
-                        ("messages", 40),
-                    ],
-                    keep=("messages", 10),
-                ),
                 ToolRetryMiddleware(
                     max_retries=3,
                     backoff_factor=2.0,
                     initial_delay=1.0,
-                    max_delay=30.0,
-                    jitter=True,
-                    retry_on=(ConnectionError, TimeoutError, httpx.HTTPError),
-                    on_failure="continue",
                 ),
-                _handle_tool_errors,
                 ContextEditingMiddleware(
                     edits=[
-                        ClearToolUsesEdit(trigger=100_000, keep=5),
+                        ClearToolUsesEdit(trigger=100000, keep=3),
                     ],
                 ),
             ],
@@ -416,9 +331,10 @@ class LangGraphAgent:
         )
 
         try:
-            result = await self.graph.ainvoke(
+            result = await asyncio.to_thread(
+                self.graph.invoke,
                 {"messages": [HumanMessage(content=task_text)]},
-                config={"configurable": {"thread_id": str(self.total_tasks)}},
+                {"configurable": {"thread_id": str(self.total_tasks)}},
             )
 
             final_answer, tool_results = self._extract_results(result)
@@ -437,7 +353,9 @@ class LangGraphAgent:
             self.successful_tasks += 1
 
         except Exception as e:
-            logger.error("Task failed: %s\n%s", e, traceback.format_exc())
+            print(f"❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
             await updater.update_status(
                 TaskState.failed, new_agent_text_message(f"Error: {e}")
             )
