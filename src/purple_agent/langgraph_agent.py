@@ -17,7 +17,7 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, Sequence, Unio
 
 import httpx
 from pydantic import BaseModel, Field, create_model
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
@@ -39,6 +39,19 @@ from a2a.types import Message, Part, TaskState, TextPart
 from a2a.utils import get_message_text, new_agent_text_message
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Runtime config — scenario.toml → Docker env → burası
+# ---------------------------------------------------------------------------
+# Nasıl ayarlanır (scenario.toml → participants.env):
+#   AGENT_MAX_ITERATIONS = "25"   # create_agent iç loop sınırı (tool round-trip sayısı)
+#   AGENT_TURN_TIMEOUT   = "60"   # turn başına max süre (saniye); AX-Bench ~70s
+# ---------------------------------------------------------------------------
+_MAX_ITERATIONS: int = int(os.getenv("AGENT_MAX_ITERATIONS", "50"))
+_TURN_TIMEOUT: float = float(os.getenv("AGENT_TURN_TIMEOUT", "60"))
+
+logger.info("Config | max_iterations=%d  turn_timeout=%.0fs", _MAX_ITERATIONS, _TURN_TIMEOUT)
 
 
 # ---------------------------------------------------------------------------
@@ -162,8 +175,21 @@ def _on_tool_error(request, handler):
 @before_model
 def _log_llm(state, runtime) -> None:
     msgs = state.get("messages", [])
-    logger.info("LLM call | msgs=%d tool_results=%d",
-                len(msgs), sum(1 for m in msgs if isinstance(m, ToolMessage)))
+    tool_result_count = sum(1 for m in msgs if isinstance(m, ToolMessage))
+    logger.info("LLM call | msgs=%d tool_results=%d", len(msgs), tool_result_count)
+
+    # Eşiğe yaklaşınca modele "dur ve özetle" uyarısı enjekte et.
+    # Bu sistem mesajı modelin bir sonraki çağrısında context'e girer.
+    warning_threshold = max(1, _MAX_ITERATIONS // 3)
+    if tool_result_count >= warning_threshold:
+        remaining = _MAX_ITERATIONS // 3 - (tool_result_count - warning_threshold)
+        logger.warning("⚠️ Tool call budget %d/%d — injecting stop warning", tool_result_count, _MAX_ITERATIONS // 3)
+        return SystemMessage(
+            content=(
+                f"⚠️ BUDGET WARNING: You have made {tool_result_count} tool calls. "
+                f"You must complete the task NOW. Stop calling tools and write your final answer summarizing what you have done."
+            )
+        )
     return None
 
 
@@ -191,20 +217,20 @@ def _build_middleware(summarizer: str) -> list:
 # ---------------------------------------------------------------------------
 
 _PLANNER_PROMPT = """\
-You are a strategic planner. Analyze the task and produce a step-by-step plan.
+You are a strategic planner. Analyze the task and produce a concise step-by-step plan.
 
 Rules:
+- Keep the plan SHORT: maximum 6 steps. Combine related actions into one step.
 - If tools are available, reference them by name in each step.
-- If no tools are available, plan using reasoning, retrieval from context, or direct answer.
+- If no tools are available, plan using reasoning only.
 - Output ONLY a JSON array of step strings. No markdown, no extra text.
 
 Example with tools:
-["google_search for recent AI papers", "get_transcript from top YouTube result",
- "createGoogleDoc summarizing findings", "draft_email to team with doc link"]
+["search Google Drive for project reports", "createGoogleDoc summarizing key findings",
+ "draft_email to team with doc link"]
 
 Example without tools:
-["Analyze the question carefully", "Recall relevant knowledge",
- "Structure a clear and complete answer"]
+["Analyze the question carefully", "Structure a clear and complete answer"]
 """
 
 _EXECUTOR_PROMPT = """\
@@ -213,13 +239,15 @@ You are a precise execution engine. Follow the plan below exactly.
 Plan:
 {plan}
 
-Rules:
-1. Execute each step in order.
-2. If tools exist: always search/list before using any ID or URL — never guess.
+CRITICAL RULES:
+1. Execute each step in order using the available tools.
+2. SEARCH/LIST before using any ID or URL — never guess or hallucinate values.
    Chain outputs: use IDs/URLs from one tool's result as input to the next.
-   Always provide ALL required arguments.
-3. If no tools exist: reason carefully, use your knowledge, give a complete answer.
-4. On error: adjust arguments and retry. Do not give up.
+3. Always provide ALL required arguments to every tool call.
+4. On error: try once with adjusted arguments, then move on.
+5. BE EFFICIENT: complete the entire plan in at most {max_tool_calls} tool calls total.
+   When you have completed all plan steps, STOP calling tools and write your final answer.
+6. STOP CONDITION: After {max_tool_calls} tool calls, you MUST stop and summarize results.
 """
 
 
@@ -272,12 +300,6 @@ def _planner_node(model: BaseChatModel, tools: List[StructuredTool]):
 def _executor_node(model: BaseChatModel, tools: List[StructuredTool], summarizer: str):
     middleware = _build_middleware(summarizer)
 
-    # MAX_TOOL_ITERATIONS: create_agent iç grafiğine verilen recursion_limit.
-    # create_agent iç düğümleri: agent_node ↔ tool_node (her round-trip = 2 geçiş).
-    # 10 tool çağrısı × 2 geçiş + 1 final LLM = 21 → 25 güvenli üst sınır.
-    # AX-Bench turn timeout ~70s; 10 tool × ~3s = 30s → yeterli marj.
-    MAX_TOOL_ITERATIONS = 25
-
     async def executor(state: AgentState) -> Dict:
         plan = state.get("plan", [])
         plan_text = "\n".join(f"{i+1}. {s}" for i, s in enumerate(plan)) if plan else "No plan."
@@ -285,7 +307,10 @@ def _executor_node(model: BaseChatModel, tools: List[StructuredTool], summarizer
         agent = create_agent(
             model=model,
             tools=tools,
-            system_prompt=_EXECUTOR_PROMPT.format(plan=plan_text),
+            system_prompt=_EXECUTOR_PROMPT.format(
+                plan=plan_text,
+                max_tool_calls=_MAX_ITERATIONS // 3,
+            ),
             middleware=middleware,
         )
 
@@ -293,15 +318,18 @@ def _executor_node(model: BaseChatModel, tools: List[StructuredTool], summarizer
         if not history:
             history = [HumanMessage(content="Complete the task.")]
 
-        result = await agent.ainvoke(
-            {"messages": history},
-            config={"recursion_limit": MAX_TOOL_ITERATIONS},
-        )
+        try:
+            result = await agent.ainvoke(
+                {"messages": history},
+                config={"recursion_limit": _MAX_ITERATIONS},
+            )
+        except Exception as e:
+            if "recursion" in str(e).lower() or "GRAPH_RECURSION_LIMIT" in str(e):
+                logger.warning("Executor hit recursion limit — returning messages collected so far")
+                # history zaten tüm toplanmış mesajları içeriyor; boş new_msgs dön
+                return {"messages": []}
+            raise
 
-        # add_messages reducer duplicate'i önlemek için:
-        # agent.ainvoke history'yi içeride yeniden append eder,
-        # dolayısıyla dönen messages = history + yeni_mesajlar.
-        # Sadece yeni (history'de olmayan) mesajları state'e ekle.
         history_ids = {id(m) for m in history}
         new_msgs = [m for m in result.get("messages", []) if id(m) not in history_ids]
         return {"messages": new_msgs}
@@ -393,20 +421,16 @@ class LangGraphAgent:
         self.total_tasks += 1
         await updater.update_status(TaskState.working, new_agent_text_message("Planning…"))
 
-        # TURN_TIMEOUT: AX-Bench client timeout ~70s per turn.
-        # Biz 60s'de graph'ı keserek complete() diyebiliyoruz.
-        TURN_TIMEOUT = 60.0
-
         try:
             result = await asyncio.wait_for(
                 self.graph.ainvoke(
                     {"messages": [HumanMessage(content=get_message_text(message))], "plan": []},
                     config={
                         "configurable": {"thread_id": f"task-{self.total_tasks}"},
-                        "recursion_limit": 50,
+                        "recursion_limit": _MAX_ITERATIONS,
                     },
                 ),
-                timeout=TURN_TIMEOUT,
+                timeout=_TURN_TIMEOUT,
             )
             msgs = result.get("messages", [])
             calls = _tool_calls(msgs)
@@ -423,14 +447,11 @@ class LangGraphAgent:
             # Explicitly signal completion — required by A2A protocol
             await updater.complete()
         except asyncio.TimeoutError:
-            logger.warning("Task %d timed out after %.0fs — returning partial result", self.total_tasks, TURN_TIMEOUT)
+            logger.warning("Task %d timed out after %.0fs — returning partial result", self.total_tasks, _TURN_TIMEOUT)
             await updater.complete()
         except Exception as e:
             logger.error("Task failed: %s\n%s", e, traceback.format_exc())
-            # Do NOT re-raise — let executor see clean return; failed() marks terminal state
-            await updater.failed(
-                new_agent_text_message(f"Error: {e}")
-            )
+            await updater.failed(new_agent_text_message(f"Error: {e}"))
 
     async def close(self):
         await self.loader.close()
