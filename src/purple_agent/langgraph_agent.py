@@ -103,18 +103,17 @@ class MCPToolLoader:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
-    async def load(self) -> List[StructuredTool]:
-        if self._cache:
+    async def load(self, force: bool = False) -> List[StructuredTool]:
+        if self._cache and not force:
             return self._cache
-        # Sabit endpoint — discovery heuristic'leri kaldırıldı (kırılgan ve gereksiz)
         tools_url = f"{self.endpoint}/tools"
         call_url  = f"{self.endpoint}/tools/call"
         try:
             c = await self._http()
-            r = await c.get(tools_url)
+            r = await c.get(tools_url, timeout=10.0)
             if r.status_code != 200:
                 logger.warning("Tool load HTTP %d", r.status_code)
-                return []
+                return self._cache  # keep previous if any
             raw = r.json().get("tools", [])
             self._cache = [_make_tool(t, call_url, self) for t in raw]
             logger.info("Loaded %d tools", len(self._cache))
@@ -359,8 +358,9 @@ class LangGraphAgent:
         self.total_tasks = 0
         self.successful_tasks = 0
 
-    async def initialize(self):
-        self.tools = await self.loader.load()
+    async def initialize(self, force: bool = False):
+        """Load tools and (re)build graph. force=True skips cache."""
+        self.tools = await self.loader.load(force=force)
         self.graph = build_graph(self._model(), self.tools)
         logger.info("Agent ready — %d tools", len(self.tools))
 
@@ -380,8 +380,9 @@ class LangGraphAgent:
         return ChatOpenAI(model=self.model_name, temperature=self.temperature)
 
     async def run(self, message: Message, updater: TaskUpdater) -> None:
-        if not self.graph:
-            await self.initialize()
+        # Initialize if never done, OR re-init if tools failed to load last time
+        if not self.graph or not self.tools:
+            await self.initialize(force=True)
 
         self.total_tasks += 1
         await updater.update_status(TaskState.working, new_agent_text_message("Planning…"))
@@ -425,24 +426,7 @@ class LangGraphAgent:
 
 
 # ---------------------------------------------------------------------------
-# Module-level graph for LangGraph Server
+# Module-level exports
 # ---------------------------------------------------------------------------
 
-__all__ = ["LangGraphAgent", "MCPToolLoader", "graph"]
-
-graph = None
-
-_is_test = any("test" in a for a in sys.argv)
-if os.getenv("SKIP_AGENT_INIT") != "true" and not _is_test:
-    try:
-        _loop = None
-        try:
-            _loop = asyncio.get_running_loop()
-        except RuntimeError:
-            pass
-        if not _loop or not _loop.is_running():
-            _agent = LangGraphAgent(mcp_endpoint="http://localhost:8091")
-            asyncio.run(_agent.initialize())
-            graph = _agent.graph
-    except Exception as e:
-        logger.warning("Agent init skipped: %s", e)
+__all__ = ["LangGraphAgent", "MCPToolLoader"]
