@@ -166,6 +166,16 @@ class MCPToolLoader:
                 return json.dumps({"error": str(e)})
 
         def _execute_sync(**kwargs: Any) -> str:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                # Already inside an event loop (Jupyter / LangGraph) — run in thread
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(asyncio.run, _execute_async(**kwargs))
+                    return future.result()
             return asyncio.run(_execute_async(**kwargs))
 
         return StructuredTool(
@@ -185,7 +195,12 @@ def _schema_to_pydantic(tool_name: str, schema: Dict[str, Any]) -> Optional[type
     """
     props = schema.get("properties", {})
     if not props:
-        return None
+        # Zero-arg tool: return an empty Pydantic model so LLM sees a valid schema
+        safe = re.sub(r"[^a-zA-Z0-9_]", "_", tool_name)
+        try:
+            return create_model(f"{safe}_args")
+        except Exception:
+            return None
 
     required = set(schema.get("required", []))
     _type_map = {"string": str, "integer": int, "number": float, "boolean": bool, "array": list, "object": dict}
