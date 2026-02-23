@@ -31,9 +31,6 @@ from langchain.agents.middleware import (
     ContextEditingMiddleware,
     ClearToolUsesEdit,
     SummarizationMiddleware,
-    AgentMiddleware,
-    ModelRequest,
-    ModelResponse,
     wrap_tool_call,
     before_model,
 )
@@ -492,10 +489,7 @@ class LangGraphAgent:
 
         except Exception as e:
             logger.error("Task failed: %s\n%s", e, traceback.format_exc())
-            await updater.update_status(
-                TaskState.failed, new_agent_text_message(f"Error: {e}")
-            )
-            raise
+            await updater.failed(new_agent_text_message(f"Error: {e}"))
 
     # ----- Result Extraction -----
 
@@ -507,14 +501,29 @@ class LangGraphAgent:
         final_answer = ""
 
         for msg in messages:
+            # tool_calls: LangChain returns list of dicts or ToolCall objects
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
-                    tool_results.append({
-                        "name": tc.get("name", "unknown"),
-                        "arguments": tc.get("args", {}),
-                    })
-            if hasattr(msg, "content") and msg.content:
-                final_answer = msg.content
+                    if isinstance(tc, dict):
+                        name = tc.get("name", "unknown")
+                        args = tc.get("args", tc.get("arguments", {}))
+                    else:
+                        name = getattr(tc, "name", "unknown")
+                        args = getattr(tc, "args", {})
+                    tool_results.append({"name": name, "arguments": args})
+
+            # Track last non-empty text content as final answer
+            content = getattr(msg, "content", None)
+            if content and isinstance(content, str) and content.strip():
+                final_answer = content
+            elif content and isinstance(content, list):
+                # Some models return content as list of blocks
+                text = " ".join(
+                    b.get("text", "") if isinstance(b, dict) else str(b)
+                    for b in content
+                ).strip()
+                if text:
+                    final_answer = text
 
         return final_answer or "Task completed", tool_results
 
