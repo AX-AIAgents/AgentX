@@ -1,72 +1,101 @@
 """
 AgentX LangGraph Agent
 ======================
-Benchmark-optimized agent powered by LangChain's create_agent.
-
-Architecture:
-- create_agent provides the compiled LangGraph graph with built-in tool loop
-- MCPToolLoader handles discovery and conversion of MCP tools
-- Middleware stack: retry, summarization, error handling, logging
-- LangGraphAgent orchestrates initialization, execution, and lifecycle
+Plan-and-Execute graph:
+  planner  → her zaman çalışır, tool olsa da olmasa da
+  executor → planı uygular; tool varsa kullanır, yoksa muhakeme eder
 """
 
-import json
 import asyncio
+import json
 import logging
 import os
 import re
 import sys
 import traceback
-from typing import List, Dict, Any, Optional, Union, Literal
+from typing import Annotated, Any, Dict, List, Literal, Optional, Sequence, Union
 
 import httpx
-from langchain_core.messages import HumanMessage, ToolMessage
+from pydantic import BaseModel, Field, create_model
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.tools import Tool
+from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
-    ToolRetryMiddleware,
     ContextEditingMiddleware,
     ClearToolUsesEdit,
     SummarizationMiddleware,
-    AgentMiddleware,
-    ModelRequest,
-    ModelResponse,
-    wrap_tool_call,
+    ToolRetryMiddleware,
     before_model,
+    wrap_tool_call,
 )
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import add_messages
+from typing_extensions import TypedDict
 
 from a2a.server.tasks import TaskUpdater
-from a2a.types import Message, TaskState, Part, TextPart
+from a2a.types import Message, Part, TaskState, TextPart
 from a2a.utils import get_message_text, new_agent_text_message
 
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# MCP Tool Loading
-# =============================================================================
+# ---------------------------------------------------------------------------
+# JSON Schema → Pydantic (args_schema — LLM'e zorunlu argümanları öğretir)
+# ---------------------------------------------------------------------------
 
+_TYPE_MAP: Dict[str, type] = {
+    "string": str, "integer": int, "number": float,
+    "boolean": bool, "array": list, "object": dict,
+}
+
+
+def _resolve_type(prop: Dict[str, Any]) -> type:
+    """anyOf / type alanlarını Python tipine çevirir."""
+    if "anyOf" in prop:
+        # anyOf içindeki null olmayan ilk tipi al
+        for sub in prop["anyOf"]:
+            if sub.get("type") != "null":
+                return _TYPE_MAP.get(sub.get("type", "string"), str)
+        return str
+    return _TYPE_MAP.get(prop.get("type", "string"), str)
+
+
+# Pydantic model isimlerinde sadece alfanümerik + _ kullanılabilir
+_INVALID_CHARS_RE = re.compile(r"[^a-zA-Z0-9_]")
+
+
+def _to_pydantic(name: str, schema: Dict[str, Any]) -> Optional[type[BaseModel]]:
+    props = schema.get("properties", {})
+    if not props:
+        return None
+    required = set(schema.get("required", []))
+    fields = {}
+    for k, v in props.items():
+        py_type = _resolve_type(v)
+        desc = v.get("description", "")
+        if k in required:
+            fields[k] = (py_type, Field(..., description=desc))
+        else:
+            default = v.get("default", None)
+            fields[k] = (Optional[py_type], Field(default, description=desc))
+    safe_name = _INVALID_CHARS_RE.sub("_", name)
+    return create_model(f"{safe_name}_args", **fields)
+
+
+# ---------------------------------------------------------------------------
+# MCP Tool Loader
+# ---------------------------------------------------------------------------
 
 class MCPToolLoader:
-    """Discover and load MCP tools, converting them to LangChain Tool format.
-
-    Uses Agent Discovery protocol (/.well-known/agent.json) to find tool endpoints,
-    with fallback to standard /tools path.
-    """
-
-    _TOOL_KEYWORDS = frozenset(["mcp", "tool", "function", "skill"])
-    _TOOLS_URL_PATTERN = re.compile(r'https?://[^\s"]+/tools')
-
-    def __init__(self, mcp_endpoint: str):
-        self.mcp_endpoint = mcp_endpoint.rstrip("/")
+    def __init__(self, endpoint: str):
+        self.endpoint = endpoint.rstrip("/")
         self._client: Optional[httpx.AsyncClient] = None
-        self._tools_cache: List[Tool] = []
-        self.tools_endpoint: Optional[str] = None
+        self._cache: List[StructuredTool] = []
 
-    async def get_client(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
+    async def _http(self) -> httpx.AsyncClient:
+        if not self._client or self._client.is_closed:
             self._client = httpx.AsyncClient(timeout=60.0)
         return self._client
 
@@ -74,211 +103,243 @@ class MCPToolLoader:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
-    # ----- Discovery -----
-
-    async def _discover_tools_endpoint(self) -> str:
-        """Resolve the tools endpoint URL via agent card or fallback."""
-        client = await self.get_client()
-
+    async def load(self) -> List[StructuredTool]:
+        if self._cache:
+            return self._cache
+        # Sabit endpoint — discovery heuristic'leri kaldırıldı (kırılgan ve gereksiz)
+        tools_url = f"{self.endpoint}/tools"
+        call_url  = f"{self.endpoint}/tools/call"
         try:
-            resp = await client.get(f"{self.mcp_endpoint}/.well-known/agent.json")
-            if resp.status_code == 200:
-                card = resp.json()
-                print(f"✅ Agent Card: {card.get('name', 'Unknown')}")
-
-                # Explicit tools_url field
-                if card.get("tools_url"):
-                    return card["tools_url"]
-
-                # Scan card text for tool URLs
-                card_text = str(card)
-                url_match = self._TOOLS_URL_PATTERN.search(card_text)
-                if url_match:
-                    return url_match.group(0)
-
-                # Keyword heuristic
-                if any(k in card_text.lower() for k in self._TOOL_KEYWORDS):
-                    return f"{self.mcp_endpoint}/tools"
-            else:
-                print(f"⚠️ No Agent Card (HTTP {resp.status_code}), using default /tools")
-        except Exception as e:
-            print(f"⚠️ Discovery error: {e}")
-
-        return f"{self.mcp_endpoint}/tools"
-
-    # ----- Tool Loading -----
-
-    async def load_tools(self) -> List[Tool]:
-        """Fetch MCP tools and convert to LangChain Tools."""
-        if self._tools_cache:
-            return self._tools_cache
-
-        if not self.tools_endpoint:
-            self.tools_endpoint = await self._discover_tools_endpoint()
-
-        url = (
-            self.tools_endpoint
-            if "://" in self.tools_endpoint
-            else f"{self.mcp_endpoint}/{self.tools_endpoint.lstrip('/')}"
-        )
-
-        print(f"📥 Loading tools from: {url}")
-        client = await self.get_client()
-
-        try:
-            resp = await client.get(url)
-            if resp.status_code != 200:
-                print(f"⚠️ Failed to load tools: HTTP {resp.status_code}")
+            c = await self._http()
+            r = await c.get(tools_url)
+            if r.status_code != 200:
+                logger.warning("Tool load HTTP %d", r.status_code)
                 return []
-
-            mcp_tools = resp.json().get("tools", [])
-            print(f"✅ Loaded {len(mcp_tools)} MCP tools")
-
-            self._tools_cache = [
-                self._create_langchain_tool(t, url) for t in mcp_tools
-            ]
-            return self._tools_cache
+            raw = r.json().get("tools", [])
+            self._cache = [_make_tool(t, call_url, self) for t in raw]
+            logger.info("Loaded %d tools", len(self._cache))
         except Exception as e:
-            print(f"❌ Error loading tools: {e}")
-            return []
-
-    def _create_langchain_tool(self, mcp_tool: Dict, endpoint_url: str) -> Tool:
-        """Convert a single MCP tool definition to a LangChain Tool."""
-        name = mcp_tool.get("name", "")
-        description = mcp_tool.get("description", f"Execute {name}")
-        schema = mcp_tool.get("inputSchema", {})
-        call_url = f"{endpoint_url}/call"
-        loader = self  # explicit reference, no nonlocal hack
-
-        async def _execute_async(*args, **kwargs) -> str:
-            try:
-                final_args = _resolve_args(args, kwargs, schema)
-                client = await loader.get_client()
-                resp = await client.post(
-                    call_url, json={"name": name, "arguments": final_args}
-                )
-                return json.dumps(resp.json(), default=str)
-            except Exception as e:
-                return json.dumps({"error": str(e)})
-
-        def _execute_sync(*args, **kwargs) -> str:
-            return asyncio.run(_execute_async(*args, **kwargs))
-
-        return Tool(
-            name=name,
-            description=description,
-            func=_execute_sync,
-            coroutine=_execute_async,
-        )
+            logger.error("Tool load: %s", e)
+        return self._cache
 
 
-def _resolve_args(
-    args: tuple, kwargs: Dict[str, Any], schema: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Map positional args to named params using the tool's input schema."""
-    final_args = kwargs.copy()
-    if args and not final_args and len(args) == 1:
-        props = list(schema.get("properties", {}).keys())
-        key = props[0] if props else "input"
-        final_args[key] = args[0]
-    return final_args
+def _make_tool(raw: Dict, call_url: str, loader: MCPToolLoader) -> StructuredTool:
+    name = raw.get("name", "")
+
+    async def _run(**kwargs: Any) -> str:
+        try:
+            c = await loader._http()
+            r = await c.post(call_url, json={"name": name, "arguments": kwargs})
+            return json.dumps(r.json(), default=str)
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+
+    return StructuredTool(
+        name=name,
+        description=raw.get("description", f"Execute {name}"),
+        func=lambda **kw: asyncio.run(_run(**kw)),
+        coroutine=_run,
+        args_schema=_to_pydantic(name, raw.get("inputSchema", {})),
+    )
 
 
-# =============================================================================
-# Custom Middleware: Tool Error Handler
-# =============================================================================
-
+# ---------------------------------------------------------------------------
+# Middleware
+# ---------------------------------------------------------------------------
 
 @wrap_tool_call
-def _handle_tool_errors(request, handler):
-    """Catch tool exceptions and return model-friendly error messages.
-
-    Instead of raw stack traces the LLM sees a short, actionable hint so it
-    can retry with different arguments or choose an alternative tool.
-    """
+def _on_tool_error(request, handler):
     try:
         return handler(request)
     except Exception as e:
-        tool_name = request.tool_call.get("name", "unknown")
-        error_msg = (
-            f"Tool '{tool_name}' failed: {e}. "
-            "Check your arguments and try again, or use an alternative approach."
-        )
-        logger.warning("Tool error [%s]: %s", tool_name, e)
+        name = request.tool_call.get("name", "unknown")
+        logger.warning("Tool error [%s]: %s", name, e)
         return ToolMessage(
-            content=error_msg,
+            content=f"Tool '{name}' failed: {e}. Try different arguments or another tool.",
             tool_call_id=request.tool_call["id"],
         )
 
 
-# =============================================================================
-# Custom Middleware: Observability Logger
-# =============================================================================
-
-
 @before_model
-def _log_model_call(state, runtime) -> None:
-    """Log context size before each LLM call for observability."""
-    messages = state.get("messages", [])
-    tool_msgs = sum(1 for m in messages if isinstance(m, ToolMessage))
-    logger.info(
-        "🧠 LLM call: %d messages (%d tool results)",
-        len(messages),
-        tool_msgs,
-    )
+def _log_llm(state, runtime) -> None:
+    msgs = state.get("messages", [])
+    logger.info("LLM call | msgs=%d tool_results=%d",
+                len(msgs), sum(1 for m in msgs if isinstance(m, ToolMessage)))
     return None
 
 
-# =============================================================================
-# System Prompt
-# =============================================================================
-
-SYSTEM_PROMPT = """You are a highly capable AI assistant competing in a benchmark evaluation. You have access to tools that interact with real services (Google Drive, Gmail, YouTube, Notion, Web Search, etc.).
-
-Your Goal: Complete every task accurately by calling the RIGHT tools with CORRECT arguments.
-
-## Execution Strategy
-
-1. **DECOMPOSE** the request into atomic steps. Identify which tools are needed and in what order.
-2. **SEARCH FIRST** — never guess or hallucinate IDs, file names, or URLs. Always use a search/list tool to discover resources before operating on them.
-3. **CHAIN RESULTS** — use output from one tool as input to the next. For example:
-   - `google_search` → get URL → `get_transcript` or `scrape`
-   - `search` or `listFolder` → get document ID → `getGoogleDocContent`
-   - Research results → `createGoogleDoc` or `API-post-page` → `draft_email` or `send_email`
-4. **ARGUMENTS MATTER** — always provide ALL required arguments:
-   - `google_search`: include `q`, `gl`, `hl` parameters
-   - `get_transcript`: provide the full video URL (https://...)
-   - `createGoogleDoc`: include `name`, `content`, and `parentFolderId` when available
-   - `draft_email` / `send_email`: include `to` (valid email), `subject`, and `body`
-   - `API-post-page`: provide complete page structure with title and content blocks
-   - `API-patch-block-children`: provide `block_id` and `children` array
-   - `createFolder`: include `name` and `parent` if available
-5. **RECOVER from errors** — if a tool fails, try alternative arguments or a different approach. Do not give up.
-6. **BE EFFICIENT** — complete the task in as few steps as possible. Avoid redundant tool calls.
-
-Tools available: {tool_names}
-
-Remember: You are being scored on (1) calling the correct tools, (2) providing correct arguments, and (3) efficiency. Be thorough and precise."""
+def _build_middleware(summarizer: str) -> list:
+    return [
+        _log_llm,
+        SummarizationMiddleware(
+            model=summarizer,
+            trigger=[("tokens", 80_000), ("messages", 40)],
+            keep=("messages", 20),
+        ),
+        ToolRetryMiddleware(
+            max_retries=3, backoff_factor=2.0,
+            initial_delay=1.0, max_delay=30.0, jitter=True,
+            retry_on=(ConnectionError, TimeoutError, httpx.HTTPError),
+            on_failure="continue",
+        ),
+        _on_tool_error,
+        ContextEditingMiddleware(edits=[ClearToolUsesEdit(trigger=100_000, keep=5)]),
+    ]
 
 
-# =============================================================================
-# Main Agent Class
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
 
+_PLANNER_PROMPT = """\
+You are a strategic planner. Analyze the task and produce a step-by-step plan.
+
+Rules:
+- If tools are available, reference them by name in each step.
+- If no tools are available, plan using reasoning, retrieval from context, or direct answer.
+- Output ONLY a JSON array of step strings. No markdown, no extra text.
+
+Example with tools:
+["google_search for recent AI papers", "get_transcript from top YouTube result",
+ "createGoogleDoc summarizing findings", "draft_email to team with doc link"]
+
+Example without tools:
+["Analyze the question carefully", "Recall relevant knowledge",
+ "Structure a clear and complete answer"]
+"""
+
+_EXECUTOR_PROMPT = """\
+You are a precise execution engine. Follow the plan below exactly.
+
+Plan:
+{plan}
+
+Rules:
+1. Execute each step in order.
+2. If tools exist: always search/list before using any ID or URL — never guess.
+   Chain outputs: use IDs/URLs from one tool's result as input to the next.
+   Always provide ALL required arguments.
+3. If no tools exist: reason carefully, use your knowledge, give a complete answer.
+4. On error: adjust arguments and retry. Do not give up.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Graph
+# ---------------------------------------------------------------------------
+
+class AgentState(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    plan: List[str]
+
+
+def _planner_node(model: BaseChatModel, tools: List[StructuredTool]):
+    tool_catalog = (
+        "\n".join(f"- {t.name}: {t.description[:120]}" for t in tools)
+        if tools else "No tools available — plan using reasoning only."
+    )
+
+    async def planner(state: AgentState) -> Dict:
+        # Tüm konuşma geçmişinden task mesajını çıkar
+        history = list(state.get("messages", []))
+        user_msg = next((m for m in reversed(history) if isinstance(m, HumanMessage)), None)
+        if not user_msg:
+            return {"plan": ["Answer the task directly."]}
+
+        # Planner'a geçmiş konuşmayı + planning talimatını ver
+        # Geçmiş: multi-turn context'i taşır (önceki AI yanıtları, tool sonuçları)
+        planner_history = [
+            *history,
+            HumanMessage(content=(
+                f"{_PLANNER_PROMPT}\n\nAvailable tools:\n{tool_catalog}"
+                f"\n\nTask: {user_msg.content}"
+            )),
+        ]
+        resp = await model.ainvoke(planner_history)
+
+        try:
+            plan = json.loads(resp.content)
+            if not isinstance(plan, list):
+                raise ValueError
+        except (json.JSONDecodeError, ValueError):
+            plan = [resp.content.strip()]
+
+        logger.info("Plan (%d steps): %s", len(plan), plan)
+        return {"plan": plan}
+
+    return planner
+
+
+def _executor_node(model: BaseChatModel, tools: List[StructuredTool], summarizer: str):
+    middleware = _build_middleware(summarizer)
+
+    # create_agent graph'ı bir kez derle — her invocation'da yeniden derleme
+    # Neden: system_prompt plan'a göre değişiyor, ama middleware ve model sabittir
+    # plan_text executor(state) içinde runtime'da hesaplanır
+
+    async def executor(state: AgentState) -> Dict:
+        plan = state.get("plan", [])
+        plan_text = "\n".join(f"{i+1}. {s}" for i, s in enumerate(plan)) if plan else "No plan."
+
+        agent = create_agent(
+            model=model,
+            tools=tools,
+            system_prompt=_EXECUTOR_PROMPT.format(plan=plan_text),
+            middleware=middleware,
+        )
+
+        history = list(state.get("messages", []))
+        if not history:
+            history = [HumanMessage(content="Complete the task.")]
+
+        result = await agent.ainvoke({"messages": history})
+
+        # add_messages reducer duplicate'i önlemek için:
+        # agent.ainvoke history'yi içeride yeniden append eder,
+        # dolayısıyla dönen messages = history + yeni_mesajlar.
+        # Sadece yeni (history'de olmayan) mesajları state'e ekle.
+        history_ids = {id(m) for m in history}
+        new_msgs = [m for m in result.get("messages", []) if id(m) not in history_ids]
+        return {"messages": new_msgs}
+
+    return executor
+
+
+def build_graph(model: BaseChatModel, tools: List[StructuredTool], summarizer: str = "gpt-4o-mini"):
+    g = StateGraph(AgentState)
+    g.add_node("planner", _planner_node(model, tools))
+    g.add_node("executor", _executor_node(model, tools, summarizer))
+    g.set_entry_point("planner")
+    g.add_edge("planner", "executor")
+    g.add_edge("executor", END)
+    return g.compile()
+
+
+# ---------------------------------------------------------------------------
+# Result helpers
+# ---------------------------------------------------------------------------
+
+def _final_answer(messages: Sequence[BaseMessage]) -> str:
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and msg.content and not getattr(msg, "tool_calls", None):
+            return msg.content if isinstance(msg.content, str) else str(msg.content)
+    return "Task completed"
+
+
+def _tool_calls(messages: Sequence[BaseMessage]) -> List[Dict]:
+    return [
+        {"name": tc.get("name", "unknown"), "arguments": tc.get("args", {})}
+        for msg in messages
+        if hasattr(msg, "tool_calls") and msg.tool_calls
+        for tc in msg.tool_calls
+    ]
+
+
+# ---------------------------------------------------------------------------
+# LangGraphAgent
+# ---------------------------------------------------------------------------
 
 class LangGraphAgent:
-    """LangGraph agent backed by LangChain's create_agent.
-
-    create_agent returns a compiled LangGraph graph with its own internal
-    tool-calling loop. We use it *directly* — no extra StateGraph wrapper.
-
-    Features:
-    - Single compiled graph (no graph-in-graph nesting)
-    - MCP tool discovery and loading
-    - Supports OpenAI, local, and custom model backends
-    - A2A protocol integration via ``run()``
-    """
-
     def __init__(
         self,
         mcp_endpoint: str,
@@ -288,194 +349,74 @@ class LangGraphAgent:
     ):
         self.mcp_endpoint = mcp_endpoint
         self.temperature = temperature
+        self.model_name = model if isinstance(model, str) else getattr(model, "model", "custom")
+        self.model_provider = model_provider if isinstance(model, str) else "custom"
+        self._model_instance: Optional[BaseChatModel] = None if isinstance(model, str) else model
 
-        # Resolve model name & instance
-        if isinstance(model, str):
-            self.model_name = model
-            self.model_instance = None
-            self.model_provider = model_provider
-        else:
-            self.model_name = getattr(model, "model", "custom-model")
-            self.model_instance = model
-            self.model_provider = "custom"
-
-        self.tool_loader = MCPToolLoader(mcp_endpoint)
-        self.graph = None  # CompiledGraph from create_agent
-        self.tools: List[Tool] = []
-
-        # Metrics
+        self.loader = MCPToolLoader(mcp_endpoint)
+        self.graph = None
+        self.tools: List[StructuredTool] = []
         self.total_tasks = 0
         self.successful_tasks = 0
 
-    # ----- Initialization -----
-
     async def initialize(self):
-        """Load MCP tools, resolve model, and build the agent graph."""
-        print(f"🔧 Initializing LangGraph Agent...")
-        print(f"   Model: {self.model_name} ({self.model_provider})")
-        print(f"   MCP: {self.mcp_endpoint}")
+        self.tools = await self.loader.load()
+        self.graph = build_graph(self._model(), self.tools)
+        logger.info("Agent ready — %d tools", len(self.tools))
 
-        self.tools = await self.tool_loader.load_tools()
-        print(f"✅ Loaded {len(self.tools)} tools")
-
-        model = self._resolve_model()
-        self.graph = self._build_graph(model, self.tools)
-        print("✅ Agent ready")
-
-    def _resolve_model(self) -> BaseChatModel:
-        """Return the chat model instance based on provider config."""
-        if self.model_instance:
-            return self.model_instance
-
+    def _model(self) -> BaseChatModel:
+        if self._model_instance:
+            return self._model_instance
         if self.model_provider == "local":
-            return self._try_local_model()
-
-        return ChatOpenAI(
-            model=self.model_name,
-            temperature=self.temperature,
-        )
-
-    def _try_local_model(self) -> BaseChatModel:
-        """Attempt to load LocalModel (Qwen), fallback to OpenAI."""
-        try:
-            from pathlib import Path
-
-            project_root = Path(__file__).resolve().parent.parent.parent
-            if str(project_root) not in sys.path:
-                sys.path.insert(0, str(project_root))
-
-            from custom_qwen import LocalModel
-
-            print("   Using LocalModel (Qwen)")
-            return LocalModel(temperature=self.temperature)
-        except ImportError as e:
-            print(f"⚠️ LocalModel not available, falling back to OpenAI: {e}")
-            return ChatOpenAI(
-                model=self.model_name,
-                temperature=self.temperature,
-            )
-
-    @staticmethod
-    def _build_graph(model: BaseChatModel, tools: List[Tool]):
-        """Create the compiled LangGraph graph via create_agent.
-
-        Middleware stack (executed in order):
-        1. _log_model_call      — observability: log context size before each LLM call
-        2. SummarizationMiddleware — compress long conversations to stay within context
-        3. ToolRetryMiddleware   — retry failed tool calls with jitter + backoff
-        4. _handle_tool_errors   — catch unrecoverable tool errors, return friendly msg
-        5. ContextEditingMiddleware — prune old tool uses if context grows extreme
-        """
-        tool_names = ", ".join(t.name for t in tools)
-        prompt = SYSTEM_PROMPT.replace("{tool_names}", tool_names)
-
-        return create_agent(
-            model=model,
-            tools=tools,
-            system_prompt=prompt,
-            middleware=[
-                _log_model_call,
-                SummarizationMiddleware(
-                    model="gpt-4o-mini",
-                    trigger=[
-                        ("tokens", 80_000),
-                        ("messages", 40),
-                    ],
-                    keep=("messages", 10),
-                ),
-                ToolRetryMiddleware(
-                    max_retries=3,
-                    backoff_factor=2.0,
-                    initial_delay=1.0,
-                    max_delay=30.0,
-                    jitter=True,
-                    retry_on=(ConnectionError, TimeoutError, httpx.HTTPError),
-                    on_failure="continue",
-                ),
-                _handle_tool_errors,
-                ContextEditingMiddleware(
-                    edits=[
-                        ClearToolUsesEdit(trigger=100_000, keep=5),
-                    ],
-                ),
-            ],
-        )
-
-    # ----- A2A Execution -----
+            try:
+                from pathlib import Path
+                root = Path(__file__).resolve().parent.parent.parent
+                if str(root) not in sys.path:
+                    sys.path.insert(0, str(root))
+                from custom_qwen import LocalModel
+                return LocalModel(temperature=self.temperature)
+            except ImportError as e:
+                logger.warning("LocalModel unavailable, falling back to OpenAI: %s", e)
+        return ChatOpenAI(model=self.model_name, temperature=self.temperature)
 
     async def run(self, message: Message, updater: TaskUpdater) -> None:
-        """Execute agent task (A2A interface)."""
-        if self.graph is None:
+        if not self.graph:
             await self.initialize()
 
         self.total_tasks += 1
-        task_text = get_message_text(message)
-
-        await updater.update_status(
-            TaskState.working, new_agent_text_message("Processing...")
-        )
+        await updater.update_status(TaskState.working, new_agent_text_message("Planning…"))
 
         try:
             result = await self.graph.ainvoke(
-                {"messages": [HumanMessage(content=task_text)]},
-                config={"configurable": {"thread_id": str(self.total_tasks)}},
+                {"messages": [HumanMessage(content=get_message_text(message))], "plan": []},
+                config={"configurable": {"thread_id": f"task-{self.total_tasks}"}},
             )
-
-            final_answer, tool_results = self._extract_results(result)
-
-            response_data = {
-                "response": final_answer,
-                "tool_calls": tool_results,
-                "tool_call_count": len(tool_results),
-                "metrics": self.get_metrics(),
-            }
-
+            msgs = result.get("messages", [])
+            calls = _tool_calls(msgs)
             await updater.add_artifact(
-                parts=[Part(root=TextPart(text=json.dumps(response_data)))],
+                parts=[Part(root=TextPart(text=json.dumps({
+                    "response": _final_answer(msgs),
+                    "tool_calls": calls,
+                    "tool_call_count": len(calls),
+                    "metrics": self.get_metrics(),
+                })))],
                 name="Response",
             )
             self.successful_tasks += 1
-
         except Exception as e:
             logger.error("Task failed: %s\n%s", e, traceback.format_exc())
-            await updater.update_status(
-                TaskState.failed, new_agent_text_message(f"Error: {e}")
-            )
+            await updater.update_status(TaskState.failed, new_agent_text_message(f"Error: {e}"))
             raise
 
-    # ----- Result Extraction -----
-
-    @staticmethod
-    def _extract_results(result: Dict) -> tuple[str, List[Dict]]:
-        """Extract final answer and tool call info from graph output."""
-        messages = result.get("messages", [])
-        tool_results: List[Dict] = []
-        final_answer = ""
-
-        for msg in messages:
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                for tc in msg.tool_calls:
-                    tool_results.append({
-                        "name": tc.get("name", "unknown"),
-                        "arguments": tc.get("args", {}),
-                    })
-            if hasattr(msg, "content") and msg.content:
-                final_answer = msg.content
-
-        return final_answer or "Task completed", tool_results
-
-    # ----- Lifecycle -----
-
     async def close(self):
-        """Release resources."""
-        await self.tool_loader.close()
+        await self.loader.close()
 
     def get_metrics(self) -> Dict:
         total = max(self.total_tasks, 1)
         return {
             "total_tasks": self.total_tasks,
             "successful_tasks": self.successful_tasks,
-            "success_rate": f"{(self.successful_tasks / total) * 100:.1f}%",
+            "success_rate": f"{self.successful_tasks / total * 100:.1f}%",
         }
 
     def reset(self):
@@ -483,34 +424,25 @@ class LangGraphAgent:
         self.successful_tasks = 0
 
 
-# =============================================================================
-# Exports
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Module-level graph for LangGraph Server
+# ---------------------------------------------------------------------------
 
 __all__ = ["LangGraphAgent", "MCPToolLoader", "graph"]
 
-
-# =============================================================================
-# Graph Instance for LangGraph Server
-# =============================================================================
-
 graph = None
 
-_is_test_run = any("test" in arg for arg in sys.argv)
-if os.getenv("SKIP_AGENT_INIT") != "true" and not _is_test_run:
+_is_test = any("test" in a for a in sys.argv)
+if os.getenv("SKIP_AGENT_INIT") != "true" and not _is_test:
     try:
+        _loop = None
         try:
             _loop = asyncio.get_running_loop()
         except RuntimeError:
-            _loop = None
-
-        if _loop is None or not _loop.is_running():
-            _agent = LangGraphAgent(
-                mcp_endpoint="http://localhost:8091",
-                model="gpt-4o-mini",
-                temperature=0.0,
-            )
+            pass
+        if not _loop or not _loop.is_running():
+            _agent = LangGraphAgent(mcp_endpoint="http://localhost:8091")
             asyncio.run(_agent.initialize())
             graph = _agent.graph
     except Exception as e:
-        print(f"⚠️ Agent initialization skipped or failed: {e}")
+        logger.warning("Agent init skipped: %s", e)

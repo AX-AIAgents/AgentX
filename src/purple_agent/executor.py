@@ -110,12 +110,14 @@ class AdvancedPurpleExecutor(AgentExecutor):
         retry_config: RetryConfig | None = None,
         memory_config: MemoryConfig | None = None,
         task_timeout: float = 300.0,  # 5 minutes default
+        model_provider: str = "openai",
     ):
         self.mcp_endpoint = mcp_endpoint
         self.model_config = model_config
         self.retry_config = retry_config
         self.memory_config = memory_config
         self.task_timeout = task_timeout
+        self.model_provider = model_provider
         
         # Use LangGraph if available
         self.use_langgraph = LANGGRAPH_AVAILABLE
@@ -133,14 +135,20 @@ class AdvancedPurpleExecutor(AgentExecutor):
     def _create_agent(self):
         """Create a new agent instance with current configuration."""
         if self.use_langgraph and LANGGRAPH_AVAILABLE:
-            # Create LangGraph agent
             model_name = self.model_config.model_name if self.model_config else "gpt-4o-mini"
             temperature = self.model_config.temperature if self.model_config else 0.0
-            
+            provider = (
+                self.model_config.provider.value
+                if self.model_config and hasattr(self.model_config.provider, "value")
+                else "openai"
+            )
+            # "local" provider → use LocalModel (Qwen)
+            model_provider = "local" if provider not in ("openai", "anthropic") else "openai"
             return LangGraphAgent(
                 mcp_endpoint=self.mcp_endpoint,
                 model=model_name,
                 temperature=temperature,
+                model_provider=model_provider,
             )
         else:
             # Fallback to basic agent

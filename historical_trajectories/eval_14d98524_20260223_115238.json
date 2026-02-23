@@ -1,0 +1,689 @@
+{
+  "assessment_id": "14d98524",
+  "agent": "http://127.0.0.1:9000/",
+  "tasks": [
+    {
+      "task_id": "AX-STOR-393d59",
+      "action_score": 0.5714285714285714,
+      "argument_score": 0.5,
+      "efficiency_score": 1.0,
+      "total_score": 0.5857142857142857,
+      "status": "completed",
+      "details": {
+        "success": true,
+        "total_score": 0.5857,
+        "scores": {
+          "action": 0.5714,
+          "argument": 0.5,
+          "efficiency": 1.0
+        },
+        "weights": {
+          "action": 0.5,
+          "argument": 0.4,
+          "efficiency": 0.1
+        },
+        "details": {
+          "action": {
+            "required": [
+              "API-post-search",
+              "search",
+              "getGoogleDocContent",
+              "API-patch-block-children",
+              "createGoogleDoc",
+              "getGoogleSheetContent",
+              "draft_email"
+            ],
+            "matched": [
+              "search",
+              "draft_email",
+              "createGoogleDoc",
+              "getGoogleDocContent"
+            ],
+            "missing": [
+              "API-patch-block-children",
+              "API-post-search",
+              "getGoogleSheetContent"
+            ]
+          },
+          "argument": {
+            "passed": [
+              {
+                "tool": "search",
+                "arg": "query",
+                "value": "project status report"
+              },
+              {
+                "tool": "search",
+                "arg": "pageSize",
+                "value": 50
+              },
+              {
+                "tool": "getGoogleDocContent",
+                "arg": "documentId",
+                "value": "file-92a097bb"
+              },
+              {
+                "tool": "createGoogleDoc",
+                "arg": "name",
+                "value": "Quarterly Stakeholder Meeting Summary"
+              },
+              {
+                "tool": "createGoogleDoc",
+                "arg": "content",
+                "value": "This document will contain consolidated information from project status reports and key metrics."
+              },
+              {
+                "tool": "draft_email",
+                "arg": "subject",
+                "value": "Invitation to Quarterly Stakeholder Meeting"
+              },
+              {
+                "tool": "draft_email",
+                "arg": "body",
+                "value": "Dear Stakeholders,\n\nYou are invited to our Quarterly Stakeholder Meeting. \n\n**Date:** [Insert Date]\n**Time:** [Insert Time]\n**Location:** [Insert Location/Link]\n\n**Agenda:**\n1. Welcome and Introductions\n2. Review of Key Metrics and Milestones\n3. Discussion on Project Updates\n4. Q&A Session\n5. Next Steps\n\nPlease find attached the summary document containing consolidated project status information.\n\nBest regards,\n[Your Name]"
+              }
+            ],
+            "failed": [
+              {
+                "tool": "getGoogleSheetContent",
+                "arg": "spreadsheetId",
+                "reason": "tool_not_called"
+              },
+              {
+                "tool": "getGoogleSheetContent",
+                "arg": "range",
+                "reason": "tool_not_called"
+              },
+              {
+                "tool": "API-post-search",
+                "arg": "query",
+                "reason": "tool_not_called"
+              },
+              {
+                "tool": "API-post-search",
+                "arg": "filter",
+                "reason": "tool_not_called"
+              },
+              {
+                "tool": "API-patch-block-children",
+                "arg": "block_id",
+                "reason": "tool_not_called"
+              },
+              {
+                "tool": "API-patch-block-children",
+                "arg": "children",
+                "reason": "tool_not_called"
+              },
+              {
+                "tool": "draft_email",
+                "arg": "to",
+                "expected": "is_email",
+                "actual": [
+                  "stakeholders@example.com"
+                ],
+                "reason": "argument_invalid (expected is_email None)"
+              }
+            ],
+            "summary": "7/14 checks passed"
+          },
+          "efficiency": {
+            "optimal_steps": 7,
+            "max_steps": 14,
+            "actual_steps": 6,
+            "score": 1.0
+          },
+          "tool_calls": [
+            "search",
+            "getGoogleDocContent",
+            "search",
+            "getGoogleDocContent",
+            "createGoogleDoc",
+            "draft_email"
+          ],
+          "tool_calls_full": [
+            {
+              "name": "search",
+              "arguments": {
+                "query": "project status report",
+                "pageSize": 50,
+                "pageToken": ""
+              },
+              "result": {
+                "files": [
+                  {
+                    "id": "file-92a097bb",
+                    "name": "File matching: project status report",
+                    "mimeType": "application/vnd.google-apps.document"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "getGoogleDocContent",
+              "arguments": {
+                "documentId": "file-92a097bb"
+              },
+              "result": {
+                "id": "doc-d1dd0ed0",
+                "title": "Mock Document",
+                "content": "This is the mock document content.",
+                "body": {
+                  "content": [
+                    {
+                      "paragraph": {
+                        "elements": [
+                          {
+                            "textRun": {
+                              "content": "Mock text"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "search",
+              "arguments": {
+                "query": "status report",
+                "pageSize": 50,
+                "pageToken": ""
+              },
+              "result": {
+                "files": [
+                  {
+                    "id": "file-2def8bde",
+                    "name": "File matching: status report",
+                    "mimeType": "application/vnd.google-apps.document"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "getGoogleDocContent",
+              "arguments": {
+                "documentId": "file-2def8bde"
+              },
+              "result": {
+                "id": "doc-9a30646a",
+                "title": "Mock Document",
+                "content": "This is the mock document content.",
+                "body": {
+                  "content": [
+                    {
+                      "paragraph": {
+                        "elements": [
+                          {
+                            "textRun": {
+                              "content": "Mock text"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "createGoogleDoc",
+              "arguments": {
+                "name": "Quarterly Stakeholder Meeting Summary",
+                "content": "This document will contain consolidated information from project status reports and key metrics.",
+                "parentFolderId": ""
+              },
+              "result": {
+                "id": "doc-90f903fa",
+                "name": "Quarterly Stakeholder Meeting Summary",
+                "mimeType": "application/vnd.google-apps.document",
+                "webViewLink": "https://docs.google.com/document/d/df453bfc"
+              }
+            },
+            {
+              "name": "draft_email",
+              "arguments": {
+                "to": [
+                  "stakeholders@example.com"
+                ],
+                "subject": "Invitation to Quarterly Stakeholder Meeting",
+                "body": "Dear Stakeholders,\n\nYou are invited to our Quarterly Stakeholder Meeting. \n\n**Date:** [Insert Date]\n**Time:** [Insert Time]\n**Location:** [Insert Location/Link]\n\n**Agenda:**\n1. Welcome and Introductions\n2. Review of Key Metrics and Milestones\n3. Discussion on Project Updates\n4. Q&A Session\n5. Next Steps\n\nPlease find attached the summary document containing consolidated project status information.\n\nBest regards,\n[Your Name]",
+                "htmlBody": "<p>Dear Stakeholders,</p>\n<p>You are invited to our Quarterly Stakeholder Meeting.</p>\n<p><strong>Date:</strong> [Insert Date]</p>\n<p><strong>Time:</strong> [Insert Time]</p>\n<p><strong>Location:</strong> [Insert Location/Link]</p>\n<p><strong>Agenda:</strong></p>\n<ol>\n<li>Welcome and Introductions</li>\n<li>Review of Key Metrics and Milestones</li>\n<li>Discussion on Project Updates</li>\n<li>Q&amp;A Session</li>\n<li>Next Steps</li>\n</ol>\n<p>Please find attached the summary document containing consolidated project status information.</p>\n<p>Best regards,<br>[Your Name]</p>",
+                "mimeType": "text/html",
+                "cc": [],
+                "bcc": [],
+                "threadId": "",
+                "inReplyTo": "",
+                "attachments": [
+                  "https://docs.google.com/document/d/df453bfc"
+                ]
+              },
+              "result": {
+                "success": true,
+                "draft_id": "draft-6298463f",
+                "message": {
+                  "to": [
+                    "stakeholders@example.com"
+                  ],
+                  "subject": "Invitation to Quarterly Stakeholder Meeting"
+                }
+              }
+            }
+          ]
+        },
+        "debug_info": {
+          "tool_calls_with_args": [
+            {
+              "name": "search",
+              "arguments": {
+                "query": "project status report",
+                "pageSize": 50,
+                "pageToken": ""
+              },
+              "has_args": true
+            },
+            {
+              "name": "getGoogleDocContent",
+              "arguments": {
+                "documentId": "file-92a097bb"
+              },
+              "has_args": true
+            },
+            {
+              "name": "search",
+              "arguments": {
+                "query": "status report",
+                "pageSize": 50,
+                "pageToken": ""
+              },
+              "has_args": true
+            },
+            {
+              "name": "getGoogleDocContent",
+              "arguments": {
+                "documentId": "file-2def8bde"
+              },
+              "has_args": true
+            },
+            {
+              "name": "createGoogleDoc",
+              "arguments": {
+                "name": "Quarterly Stakeholder Meeting Summary",
+                "content": "This document will contain consolidated information from project status reports and key metrics.",
+                "parentFolderId": ""
+              },
+              "has_args": true
+            },
+            {
+              "name": "draft_email",
+              "arguments": {
+                "to": [
+                  "stakeholders@example.com"
+                ],
+                "subject": "Invitation to Quarterly Stakeholder Meeting",
+                "body": "Dear Stakeholders,\n\nYou are invited to our Quarterly Stakeholder Meeting. \n\n**Date:** [Insert Date]\n**Time:** [Insert Time]\n**Location:** [Insert Location/Link]\n\n**Agenda:**\n1. Welcome and Introductions\n2. Review of Key Metrics and Milestones\n3. Discussion on Project Updates\n4. Q&A Session\n5. Next Steps\n\nPlease find attached the summary document containing consolidated project status information.\n\nBest regards,\n[Your Name]",
+                "htmlBody": "<p>Dear Stakeholders,</p>\n<p>You are invited to our Quarterly Stakeholder Meeting.</p>\n<p><strong>Date:</strong> [Insert Date]</p>\n<p><strong>Time:</strong> [Insert Time]</p>\n<p><strong>Location:</strong> [Insert Location/Link]</p>\n<p><strong>Agenda:</strong></p>\n<ol>\n<li>Welcome and Introductions</li>\n<li>Review of Key Metrics and Milestones</li>\n<li>Discussion on Project Updates</li>\n<li>Q&amp;A Session</li>\n<li>Next Steps</li>\n</ol>\n<p>Please find attached the summary document containing consolidated project status information.</p>\n<p>Best regards,<br>[Your Name]</p>",
+                "mimeType": "text/html",
+                "cc": [],
+                "bcc": [],
+                "threadId": "",
+                "inReplyTo": "",
+                "attachments": [
+                  "https://docs.google.com/document/d/df453bfc"
+                ]
+              },
+              "has_args": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "task_id": "AX-STOR-2e8cda",
+      "action_score": 0.8,
+      "argument_score": 0.18181818181818182,
+      "efficiency_score": 0.6,
+      "total_score": 0.5327272727272727,
+      "status": "completed",
+      "details": {
+        "success": true,
+        "total_score": 0.5327,
+        "scores": {
+          "action": 0.8,
+          "argument": 0.1818,
+          "efficiency": 0.6
+        },
+        "weights": {
+          "action": 0.5,
+          "argument": 0.4,
+          "efficiency": 0.1
+        },
+        "details": {
+          "action": {
+            "required": [
+              "createFolder",
+              "get_transcript",
+              "createGoogleDoc",
+              "google_search",
+              "scrape"
+            ],
+            "matched": [
+              "google_search",
+              "get_transcript",
+              "createFolder",
+              "scrape"
+            ],
+            "missing": [
+              "createGoogleDoc"
+            ]
+          },
+          "argument": {
+            "passed": [
+              {
+                "tool": "google_search",
+                "arg": "q",
+                "value": "TikTok marketing strategies"
+              },
+              {
+                "tool": "createFolder",
+                "arg": "name",
+                "value": "TikTok Marketing Strategies Content"
+              }
+            ],
+            "failed": [
+              {
+                "tool": "google_search",
+                "arg": "gl",
+                "expected": "exists",
+                "actual": null,
+                "reason": "argument_missing"
+              },
+              {
+                "tool": "google_search",
+                "arg": "hl",
+                "expected": "exists",
+                "actual": null,
+                "reason": "argument_missing"
+              },
+              {
+                "tool": "get_transcript",
+                "arg": "url",
+                "expected": "contains_http",
+                "actual": "https://example.com/result1",
+                "reason": "argument_invalid (expected contains_http None)"
+              },
+              {
+                "tool": "scrape",
+                "arg": "url",
+                "expected": "contains_http",
+                "actual": "https://example.com/result1",
+                "reason": "argument_invalid (expected contains_http None)"
+              },
+              {
+                "tool": "scrape",
+                "arg": "includeMarkdown",
+                "expected": "exists",
+                "actual": null,
+                "reason": "argument_missing"
+              },
+              {
+                "tool": "createFolder",
+                "arg": "parent",
+                "expected": "exists",
+                "actual": null,
+                "reason": "argument_missing"
+              },
+              {
+                "tool": "createGoogleDoc",
+                "arg": "name",
+                "reason": "tool_not_called"
+              },
+              {
+                "tool": "createGoogleDoc",
+                "arg": "parentFolderId",
+                "reason": "tool_not_called"
+              },
+              {
+                "tool": "createGoogleDoc",
+                "arg": "content",
+                "reason": "tool_not_called"
+              }
+            ],
+            "summary": "2/11 checks passed"
+          },
+          "efficiency": {
+            "optimal_steps": 5,
+            "max_steps": 10,
+            "actual_steps": 7,
+            "score": 0.6
+          },
+          "tool_calls": [
+            "google_search",
+            "get_video_info",
+            "get_transcript",
+            "google_search",
+            "scrape",
+            "createFolder",
+            "createTextFile"
+          ],
+          "tool_calls_full": [
+            {
+              "name": "google_search",
+              "arguments": {
+                "q": "TikTok marketing strategies",
+                "num": 5,
+                "tbs": "qdr:m",
+                "page": 1,
+                "autocorrect": true
+              },
+              "result": {
+                "searchParameters": {
+                  "q": "TikTok marketing strategies",
+                  "type": "search"
+                },
+                "organic": [
+                  {
+                    "title": "Result 1 for: TikTok marketing strategies",
+                    "link": "https://example.com/result1",
+                    "snippet": "This is a relevant search result for your query...",
+                    "position": 1
+                  },
+                  {
+                    "title": "Result 2 for: TikTok marketing strategies",
+                    "link": "https://example.com/result2",
+                    "snippet": "Another relevant result with useful information...",
+                    "position": 2
+                  },
+                  {
+                    "title": "Result 3 for: TikTok marketing strategies",
+                    "link": "https://example.com/result3",
+                    "snippet": "Third result with additional details...",
+                    "position": 3
+                  }
+                ],
+                "credits": 1
+              }
+            },
+            {
+              "name": "get_video_info",
+              "arguments": {
+                "url": "https://example.com/result1"
+              },
+              "result": {
+                "video_id": "https://example.com/result1",
+                "title": "Mock Video Title",
+                "channel": "Mock Channel",
+                "description": "This is a mock video description for testing purposes.",
+                "duration": "10:30",
+                "views": 1000000,
+                "likes": 50000,
+                "published_at": "2026-02-23T11:52:03.378315"
+              }
+            },
+            {
+              "name": "get_transcript",
+              "arguments": {
+                "url": "https://example.com/result1"
+              },
+              "result": {
+                "video_id": "https://example.com/result1",
+                "transcript": "This is a mock transcript of the video. It contains the spoken content. The video discusses various topics relevant to the query.",
+                "language": "en"
+              }
+            },
+            {
+              "name": "google_search",
+              "arguments": {
+                "q": "current trending topics",
+                "num": 5,
+                "tbs": "qdr:m",
+                "page": 1,
+                "autocorrect": true
+              },
+              "result": {
+                "searchParameters": {
+                  "q": "current trending topics",
+                  "type": "search"
+                },
+                "organic": [
+                  {
+                    "title": "Result 1 for: current trending topics",
+                    "link": "https://example.com/result1",
+                    "snippet": "This is a relevant search result for your query...",
+                    "position": 1
+                  },
+                  {
+                    "title": "Result 2 for: current trending topics",
+                    "link": "https://example.com/result2",
+                    "snippet": "Another relevant result with useful information...",
+                    "position": 2
+                  },
+                  {
+                    "title": "Result 3 for: current trending topics",
+                    "link": "https://example.com/result3",
+                    "snippet": "Third result with additional details...",
+                    "position": 3
+                  }
+                ],
+                "credits": 1
+              }
+            },
+            {
+              "name": "scrape",
+              "arguments": {
+                "url": "https://example.com/result1"
+              },
+              "result": {
+                "url": "https://example.com/result1",
+                "title": "Mock Page Title",
+                "content": "This is the scraped content of the page. It contains relevant information about the topic.",
+                "metadata": {
+                  "author": "Mock Author",
+                  "date": "2026-02-23T11:52:17.664532"
+                }
+              }
+            },
+            {
+              "name": "createFolder",
+              "arguments": {
+                "name": "TikTok Marketing Strategies Content"
+              },
+              "result": {
+                "id": "folder-0ababe92",
+                "name": "TikTok Marketing Strategies Content",
+                "mimeType": "application/vnd.google-apps.folder",
+                "webViewLink": "https://drive.google.com/drive/folders/70111cb8"
+              }
+            },
+            {
+              "name": "createTextFile",
+              "arguments": {
+                "name": "TikTok Marketing Strategies Script.txt",
+                "content": "# TikTok Marketing Strategies\n\n## Video Transcript:\nThis is a mock transcript of the video. It contains the spoken content. The video discusses various topics relevant to the query.\n\n## Current Trending Topics:\nThis is the scraped content of the page. It contains relevant information about the topic.",
+                "parentFolderId": "folder-0ababe92"
+              },
+              "result": {
+                "id": "file-b1690722",
+                "name": "TikTok Marketing Strategies Script.txt",
+                "content": "# TikTok Marketing Strategies\n\n## Video Transcript:\nThis is a mock transcript of the video. It contains the spoken content. The video discusses various topics relevant to the query.\n\n## Current Trending Topics:\nThis is the scraped content of the page. It contains relevant information about the topic.",
+                "mimeType": "text/plain"
+              }
+            }
+          ]
+        },
+        "debug_info": {
+          "tool_calls_with_args": [
+            {
+              "name": "google_search",
+              "arguments": {
+                "q": "TikTok marketing strategies",
+                "num": 5,
+                "tbs": "qdr:m",
+                "page": 1,
+                "autocorrect": true
+              },
+              "has_args": true
+            },
+            {
+              "name": "get_video_info",
+              "arguments": {
+                "url": "https://example.com/result1"
+              },
+              "has_args": true
+            },
+            {
+              "name": "get_transcript",
+              "arguments": {
+                "url": "https://example.com/result1"
+              },
+              "has_args": true
+            },
+            {
+              "name": "google_search",
+              "arguments": {
+                "q": "current trending topics",
+                "num": 5,
+                "tbs": "qdr:m",
+                "page": 1,
+                "autocorrect": true
+              },
+              "has_args": true
+            },
+            {
+              "name": "scrape",
+              "arguments": {
+                "url": "https://example.com/result1"
+              },
+              "has_args": true
+            },
+            {
+              "name": "createFolder",
+              "arguments": {
+                "name": "TikTok Marketing Strategies Content"
+              },
+              "has_args": true
+            },
+            {
+              "name": "createTextFile",
+              "arguments": {
+                "name": "TikTok Marketing Strategies Script.txt",
+                "content": "# TikTok Marketing Strategies\n\n## Video Transcript:\nThis is a mock transcript of the video. It contains the spoken content. The video discusses various topics relevant to the query.\n\n## Current Trending Topics:\nThis is the scraped content of the page. It contains relevant information about the topic.",
+                "parentFolderId": "folder-0ababe92"
+              },
+              "has_args": true
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "summary": {
+    "total_tasks": 2,
+    "completed_tasks": 2,
+    "average_score": 0.5592207792207793,
+    "action_avg": 0.6857142857142857,
+    "argument_avg": 0.34090909090909094,
+    "efficiency_avg": 0.8
+  }
+}

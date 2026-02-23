@@ -40,6 +40,7 @@ from src.purple_agent.agent import ModelConfig
 def load_config():
     return {
         "model": os.getenv("MODEL", "gpt-4o-mini"),
+        "model_provider": os.getenv("MODEL_PROVIDER", "openai"),
         "temperature": float(os.getenv("TEMPERATURE", "0.0")),
         "task_timeout": float(os.getenv("TASK_TIMEOUT", "90")),
         # if you're running local model in CI
@@ -190,10 +191,11 @@ def main():
     executor_instance = AdvancedPurpleExecutor(
         mcp_endpoint=mcp_endpoint,
         model_config=ModelConfig(
-            model=config["model"],
+            model_name=config["model"],
             temperature=config["temperature"],
         ),
         task_timeout=config["task_timeout"],
+        model_provider=config.get("model_provider", "openai"),
     )
 
     request_handler = DefaultRequestHandler(

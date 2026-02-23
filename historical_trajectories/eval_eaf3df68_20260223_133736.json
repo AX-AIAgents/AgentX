@@ -1,0 +1,38 @@
+{
+  "assessment_id": "eaf3df68",
+  "agent": "http://127.0.0.1:9000/",
+  "tasks": [
+    {
+      "task_id": "AX-STOR-393d59",
+      "action_score": 0.0,
+      "argument_score": 0.0,
+      "efficiency_score": 0.0,
+      "total_score": 0.0,
+      "status": "error",
+      "details": {
+        "error": "Timeout Error: Client Request timed out",
+        "turn": 6
+      }
+    },
+    {
+      "task_id": "AX-STOR-2e8cda",
+      "action_score": 0.0,
+      "argument_score": 0.0,
+      "efficiency_score": 0.0,
+      "total_score": 0.0,
+      "status": "error",
+      "details": {
+        "error": "HTTP Error 503: Network communication error fetching agent card from http://127.0.0.1:9000/.well-known/agent-card.json: ",
+        "turn": 1
+      }
+    }
+  ],
+  "summary": {
+    "total_tasks": 2,
+    "completed_tasks": 0,
+    "average_score": 0.0,
+    "action_avg": 0.0,
+    "argument_avg": 0.0,
+    "efficiency_avg": 0.0
+  }
+}
