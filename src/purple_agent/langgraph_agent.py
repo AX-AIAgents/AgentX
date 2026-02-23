@@ -272,9 +272,11 @@ def _planner_node(model: BaseChatModel, tools: List[StructuredTool]):
 def _executor_node(model: BaseChatModel, tools: List[StructuredTool], summarizer: str):
     middleware = _build_middleware(summarizer)
 
-    # create_agent graph'ı bir kez derle — her invocation'da yeniden derleme
-    # Neden: system_prompt plan'a göre değişiyor, ama middleware ve model sabittir
-    # plan_text executor(state) içinde runtime'da hesaplanır
+    # MAX_TOOL_ITERATIONS: create_agent iç grafiğine verilen recursion_limit.
+    # create_agent iç düğümleri: agent_node ↔ tool_node (her round-trip = 2 geçiş).
+    # 10 tool çağrısı × 2 geçiş + 1 final LLM = 21 → 25 güvenli üst sınır.
+    # AX-Bench turn timeout ~70s; 10 tool × ~3s = 30s → yeterli marj.
+    MAX_TOOL_ITERATIONS = 25
 
     async def executor(state: AgentState) -> Dict:
         plan = state.get("plan", [])
@@ -291,7 +293,10 @@ def _executor_node(model: BaseChatModel, tools: List[StructuredTool], summarizer
         if not history:
             history = [HumanMessage(content="Complete the task.")]
 
-        result = await agent.ainvoke({"messages": history})
+        result = await agent.ainvoke(
+            {"messages": history},
+            config={"recursion_limit": MAX_TOOL_ITERATIONS},
+        )
 
         # add_messages reducer duplicate'i önlemek için:
         # agent.ainvoke history'yi içeride yeniden append eder,
@@ -388,10 +393,20 @@ class LangGraphAgent:
         self.total_tasks += 1
         await updater.update_status(TaskState.working, new_agent_text_message("Planning…"))
 
+        # TURN_TIMEOUT: AX-Bench client timeout ~70s per turn.
+        # Biz 60s'de graph'ı keserek complete() diyebiliyoruz.
+        TURN_TIMEOUT = 60.0
+
         try:
-            result = await self.graph.ainvoke(
-                {"messages": [HumanMessage(content=get_message_text(message))], "plan": []},
-                config={"configurable": {"thread_id": f"task-{self.total_tasks}"}},
+            result = await asyncio.wait_for(
+                self.graph.ainvoke(
+                    {"messages": [HumanMessage(content=get_message_text(message))], "plan": []},
+                    config={
+                        "configurable": {"thread_id": f"task-{self.total_tasks}"},
+                        "recursion_limit": 50,
+                    },
+                ),
+                timeout=TURN_TIMEOUT,
             )
             msgs = result.get("messages", [])
             calls = _tool_calls(msgs)
@@ -406,6 +421,9 @@ class LangGraphAgent:
             )
             self.successful_tasks += 1
             # Explicitly signal completion — required by A2A protocol
+            await updater.complete()
+        except asyncio.TimeoutError:
+            logger.warning("Task %d timed out after %.0fs — returning partial result", self.total_tasks, TURN_TIMEOUT)
             await updater.complete()
         except Exception as e:
             logger.error("Task failed: %s\n%s", e, traceback.format_exc())
