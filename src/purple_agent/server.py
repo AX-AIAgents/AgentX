@@ -12,10 +12,16 @@ Notes:
 
 import argparse
 import asyncio
+import logging
 import os
 import signal
 import sys
 from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 import uvicorn
 from a2a.server.apps import A2AStarletteApplication

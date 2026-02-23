@@ -362,6 +362,7 @@ class LangGraphAgent:
         """Load tools and (re)build graph. force=True skips cache."""
         self.tools = await self.loader.load(force=force)
         self.graph = build_graph(self._model(), self.tools)
+        print(f"✅ Loaded {len(self.tools)} tools from MCP")
         logger.info("Agent ready — %d tools", len(self.tools))
 
     def _model(self) -> BaseChatModel:
@@ -404,10 +405,14 @@ class LangGraphAgent:
                 name="Response",
             )
             self.successful_tasks += 1
+            # Explicitly signal completion — required by A2A protocol
+            await updater.complete()
         except Exception as e:
             logger.error("Task failed: %s\n%s", e, traceback.format_exc())
-            await updater.update_status(TaskState.failed, new_agent_text_message(f"Error: {e}"))
-            raise
+            # Do NOT re-raise — let executor see clean return; failed() marks terminal state
+            await updater.failed(
+                new_agent_text_message(f"Error: {e}")
+            )
 
     async def close(self):
         await self.loader.close()
