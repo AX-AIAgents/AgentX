@@ -7,7 +7,7 @@
 #
 # Or manually:
 #   Terminal 1: python src/server.py --host 127.0.0.1 --port 8090
-#   Terminal 2: python src/agents/server.py --host 127.0.0.1 --port 9000
+#   Terminal 2: python src/purple_agent/server.py --host 127.0.0.1 --port 9000
 
 # Green Agent (Assessor) - Orchestrates evaluation
 [green_agent]
@@ -18,7 +18,7 @@ cmd = "python src/server.py --host 127.0.0.1 --port 8090"
 [[participants]]
 role = "agent"
 endpoint = "http://127.0.0.1:9000"
-cmd = "python src/agents/server.py --host 127.0.0.1 --port 9000 --mcp-endpoint http://localhost:8091"
+cmd = "python src/purple_agent/server.py --host 127.0.0.1 --port 9000 --mcp-endpoint http://localhost:8091"
 
 # Assessment Configuration
 [config]

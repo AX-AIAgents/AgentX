@@ -20,9 +20,10 @@ import traceback
 from typing import List, Dict, Any, Optional, Union, Literal
 
 import httpx
+from pydantic import BaseModel, Field, create_model
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.tools import Tool
+from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
@@ -62,7 +63,7 @@ class MCPToolLoader:
     def __init__(self, mcp_endpoint: str):
         self.mcp_endpoint = mcp_endpoint.rstrip("/")
         self._client: Optional[httpx.AsyncClient] = None
-        self._tools_cache: List[Tool] = []
+        self._tools_cache: List[StructuredTool] = []
         self.tools_endpoint: Optional[str] = None
 
     async def get_client(self) -> httpx.AsyncClient:
@@ -108,8 +109,8 @@ class MCPToolLoader:
 
     # ----- Tool Loading -----
 
-    async def load_tools(self) -> List[Tool]:
-        """Fetch MCP tools and convert to LangChain Tools."""
+    async def load_tools(self) -> List[StructuredTool]:
+        """Fetch MCP tools and convert to LangChain StructuredTools."""
         if self._tools_cache:
             return self._tools_cache
 
@@ -142,46 +143,79 @@ class MCPToolLoader:
             print(f"❌ Error loading tools: {e}")
             return []
 
-    def _create_langchain_tool(self, mcp_tool: Dict, endpoint_url: str) -> Tool:
-        """Convert a single MCP tool definition to a LangChain Tool."""
+    def _create_langchain_tool(self, mcp_tool: Dict, endpoint_url: str) -> StructuredTool:
+        """Convert MCP tool definition → LangChain StructuredTool with Pydantic args_schema.
+
+        args_schema exposes the tool's input contract to the LLM so it knows
+        exactly which arguments to pass — this is the key driver of argument_score.
+        """
         name = mcp_tool.get("name", "")
         description = mcp_tool.get("description", f"Execute {name}")
-        schema = mcp_tool.get("inputSchema", {})
+        input_schema = mcp_tool.get("inputSchema", {})
         call_url = f"{endpoint_url}/call"
-        loader = self  # explicit reference, no nonlocal hack
+        loader = self
 
-        async def _execute_async(*args, **kwargs) -> str:
+        # Build Pydantic model from JSON Schema so LLM sees typed fields
+        args_schema = _schema_to_pydantic(name, input_schema)
+
+        async def _execute_async(**kwargs: Any) -> str:
             try:
-                final_args = _resolve_args(args, kwargs, schema)
                 client = await loader.get_client()
                 resp = await client.post(
-                    call_url, json={"name": name, "arguments": final_args}
+                    call_url, json={"name": name, "arguments": kwargs}
                 )
                 return json.dumps(resp.json(), default=str)
             except Exception as e:
                 return json.dumps({"error": str(e)})
 
-        def _execute_sync(*args, **kwargs) -> str:
-            return asyncio.run(_execute_async(*args, **kwargs))
+        def _execute_sync(**kwargs: Any) -> str:
+            return asyncio.run(_execute_async(**kwargs))
 
-        return Tool(
+        return StructuredTool(
             name=name,
             description=description,
             func=_execute_sync,
             coroutine=_execute_async,
+            args_schema=args_schema,
         )
 
 
-def _resolve_args(
-    args: tuple, kwargs: Dict[str, Any], schema: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Map positional args to named params using the tool's input schema."""
-    final_args = kwargs.copy()
-    if args and not final_args and len(args) == 1:
-        props = list(schema.get("properties", {}).keys())
-        key = props[0] if props else "input"
-        final_args[key] = args[0]
-    return final_args
+def _schema_to_pydantic(tool_name: str, schema: Dict[str, Any]) -> Optional[type[BaseModel]]:
+    """Build a Pydantic model from a JSON Schema dict for use as args_schema.
+
+    This is what tells the LLM the exact argument names and types for each tool,
+    directly driving argument_score in the benchmark.
+    """
+    props = schema.get("properties", {})
+    if not props:
+        return None
+
+    required = set(schema.get("required", []))
+    _type_map = {"string": str, "integer": int, "number": float, "boolean": bool, "array": list, "object": dict}
+
+    fields: Dict[str, Any] = {}
+    for field_name, field_def in props.items():
+        # Resolve type — handle anyOf (nullable)
+        raw_type = field_def.get("type", "string")
+        if "anyOf" in field_def:
+            raw_type = next(
+                (s.get("type", "string") for s in field_def["anyOf"] if s.get("type") != "null"),
+                "string",
+            )
+        py_type = _type_map.get(raw_type, str)
+        desc = field_def.get("description", "")
+        default = field_def.get("default", None)
+
+        if field_name in required:
+            fields[field_name] = (py_type, Field(..., description=desc))
+        else:
+            fields[field_name] = (Optional[py_type], Field(default, description=desc))
+
+    safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", tool_name)
+    try:
+        return create_model(f"{safe_name}_args", **fields)
+    except Exception:
+        return None
 
 
 # =============================================================================
@@ -322,7 +356,7 @@ class LangGraphAgent:
 
         self.tool_loader = MCPToolLoader(mcp_endpoint)
         self.graph = None  # CompiledGraph from create_agent
-        self.tools: List[Tool] = []
+        self.tools: List[StructuredTool] = []
 
         # Metrics
         self.total_tasks = 0
@@ -377,7 +411,7 @@ class LangGraphAgent:
             )
 
     @staticmethod
-    def _build_graph(model: BaseChatModel, tools: List[Tool]):
+    def _build_graph(model: BaseChatModel, tools: List[StructuredTool]):
         """Create the compiled LangGraph graph via create_agent.
 
         Middleware stack (executed in order):
