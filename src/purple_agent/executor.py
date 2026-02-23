@@ -29,10 +29,9 @@ from a2a.utils.errors import ServerError
 from a2a.utils import new_agent_text_message, new_task
 
 from src.purple_agent.agent import AdvancedPurpleAgent, ModelConfig, RetryConfig, MemoryConfig
-# from langgraph_agent import LangGraphAgent
 # Optional LangGraph support
 try:
-    from langgraph_agent import LangGraphAgent
+    from src.purple_agent.langgraph_agent import LangGraphAgent
     LANGGRAPH_AVAILABLE = True
 except ImportError:
     LANGGRAPH_AVAILABLE = False
